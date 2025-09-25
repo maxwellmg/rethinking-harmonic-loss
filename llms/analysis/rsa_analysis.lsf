@@ -1,0 +1,49 @@
+#!/bin/bash
+#BSUB -J rsa_analysis                   # Job name
+#BSUB -o logs/rsa_analysis_log.%J.log         # Standard output (%J = job ID)
+#BSUB -e logs/rsa_analysis_error.%J.log          # Standard error
+#BSUB -gpu "num=1:gmodel=NVIDIAL40"
+#BSUB -q normal                        # Number of CPU cores
+#BSUB -W 12:00                      # Walltime (4 hours max; adjust as needed)
+#BSUB -u mm9628a@american.edu       # Replace with your email
+#BSUB -B                            # Send email at the beginning of the job
+#BSUB -N                            # Send email at the end of the job
+
+mkdir -p logs
+
+# Load Python (if your system uses modules)
+# Example only — uncomment if your system needs this
+# module load python/3.11.3
+
+# Activate virtual environment
+source ~/myenv/bin/activate
+
+# Start GPU monitoring in background (log every 5 seconds)
+nvidia-smi --query-gpu=timestamp,utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu,power.draw --format=csv -l 5 > logs/gpu_usage_${LSB_JOBID}.log &
+GPU_MONITOR_PID=$!
+
+# Log initial GPU status
+echo "=== GPU Status at Job Start ===" >> logs/output.${LSB_JOBID}.log
+nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv >> logs/output.${LSB_JOBID}.log
+echo "" >> logs/output.${LSB_JOBID}.log
+
+# Run your Python script
+python3 rsa_analysis.py
+
+# Kill GPU monitoring when training is done
+kill $GPU_MONITOR_PID 2>/dev/null
+
+# Include GPU usage summary in output log
+echo "" >> logs/output.${LSB_JOBID}.log
+echo "=== GPU Usage Summary ===" >> logs/output.${LSB_JOBID}.log
+echo "First 10 GPU readings:" >> logs/output.${LSB_JOBID}.log
+head -11 logs/gpu_usage_${LSB_JOBID}.log >> logs/output.${LSB_JOBID}.log
+echo "" >> logs/output.${LSB_JOBID}.log
+echo "Last 10 GPU readings:" >> logs/output.${LSB_JOBID}.log
+tail -10 logs/gpu_usage_${LSB_JOBID}.log >> logs/output.${LSB_JOBID}.log
+echo "" >> logs/output.${LSB_JOBID}.log
+
+# Calculate average GPU utilization
+echo "=== GPU Utilization Statistics ===" >> logs/output.${LSB_JOBID}.log
+awk -F',' 'NR>1 {sum+=$2; count++} END {if(count>0) printf "Average GPU Utilization: %.1f%%\n", sum/count}' logs/gpu_usage_${LSB_JOBID}.log >> logs/output.${LSB_JOBID}.log
+awk -F',' 'NR>1 {if($2>max) max=$2} END {printf "Peak GPU Utilization: %.1f%%\n", max}' logs/gpu_usage_${LSB_JOBID}.log >> logs/output.${LSB_JOBID}.log

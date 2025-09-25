@@ -1,0 +1,201 @@
+#!/bin/bash
+
+#BSUB -J h100_memory_test
+#BSUB -o logs/memory_test_h100_%J.log
+#BSUB -e logs/memory_test_h100_%J.log
+#BSUB -gpu "num=1:gmodel=NVIDIAH100PCIe"
+#BSUB -n 1
+#BSUB -R "span[ptile=1]"
+#BSUB -R "rusage[mem=32GB]"
+#BSUB -q h100
+#BSUB -W 2:00
+#BSUB -u mm9628a@american.edu
+#BSUB -B
+#BSUB -N
+
+# =============================================================================
+# ENVIRONMENT SETUP
+# =============================================================================
+
+# Create required directories
+mkdir -p logs
+mkdir -p memory_test_results
+
+# Set environment variables for stability
+export CUDA_VISIBLE_DEVICES=0
+export NCCL_DEBUG=WARN
+export PYTHONFAULTHANDLER=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:256
+
+echo "Using system-wide PyTorch installation"
+python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA available: {torch.cuda.is_available()}')"
+
+# Check GPU memory
+nvidia-smi
+
+# =============================================================================
+# TEST CONFIGURATION
+# =============================================================================
+
+# Test parameters - modify these as needed
+MODEL_TYPE="bert"
+DISTANCE_TYPE="baseline" # Test with baseline first, then try your custom distances
+
+echo "Memory test configuration:"
+echo "   - Model Type: $MODEL_TYPE"
+echo "   - Distance Type: $DISTANCE_TYPE"
+
+# =============================================================================
+# JOB INFORMATION
+# =============================================================================
+
+echo "=========== MEMORY TEST START ==========="
+echo "Job ID: $LSB_JOBID"
+echo "Host: $(hostname)"
+echo "Date: $(date)"
+echo "Working Directory: $(pwd)"
+echo "Model Type: $MODEL_TYPE"
+echo "Distance Type: $DISTANCE_TYPE"
+echo "======================================"
+
+# Check if memory test script exists
+MEMORY_TEST_SCRIPT="model_distance_agnostic_memory_test.py"
+if [[ ! -f "$MEMORY_TEST_SCRIPT" ]]; then
+    echo "ERROR: $MEMORY_TEST_SCRIPT not found in $(pwd)"
+    echo "Directory contents:"
+    ls -la
+    exit 1
+fi
+
+# Check if model files exist
+if [[ ! -d "model" ]]; then
+    echo "ERROR: model directory not found"
+    echo "Available directories:"
+    ls -la
+    exit 1
+fi
+
+# Check if required model files exist
+for model_file in "model/__init__.py" "model/GPT.py" "model/BERT.py" "model/QWEN.py"; do
+    if [[ ! -f "$model_file" ]]; then
+        echo "ERROR: $model_file not found"
+        exit 1
+    fi
+done
+
+echo "All required files found"
+
+# =============================================================================
+# RUN THE MEMORY TEST
+# =============================================================================
+
+echo "Starting memory test for $MODEL_TYPE with $DISTANCE_TYPE..."
+
+# Run the memory test with timeout
+timeout 1h python $MEMORY_TEST_SCRIPT $MODEL_TYPE $DISTANCE_TYPE 2>&1 | tee memory_test_results/memory_test_${MODEL_TYPE}_${DISTANCE_TYPE}_${LSB_JOBID}.log
+
+# Capture exit code
+EXIT_CODE=${PIPESTATUS[0]}
+
+# Handle timeout case
+if [[ $EXIT_CODE -eq 124 ]]; then
+    echo "Memory test timed out after 1 hour"
+    EXIT_CODE=124
+fi
+
+# =============================================================================
+# POST-TEST ANALYSIS
+# =============================================================================
+
+echo "=========== MEMORY TEST COMPLETE ==========="
+echo "Model Type: $MODEL_TYPE"
+echo "Distance Type: $DISTANCE_TYPE"
+echo "Exit Code: $EXIT_CODE"
+echo "Date: $(date)"
+echo "Log Location: memory_test_results/memory_test_${MODEL_TYPE}_${DISTANCE_TYPE}_${LSB_JOBID}.log"
+
+LOG_FILE="memory_test_results/memory_test_${MODEL_TYPE}_${DISTANCE_TYPE}_${LSB_JOBID}.log"
+
+if [[ $EXIT_CODE -eq 0 ]]; then
+    echo "Memory test completed successfully"
+    
+    # Extract key findings from the log
+    echo ""
+    echo "MEMORY TEST RESULTS:"
+    echo "===================="
+    
+    # Look for GPU info
+    if grep -q "GPU:" "$LOG_FILE"; then
+        GPU_INFO=$(grep "GPU:" "$LOG_FILE")
+        echo "$GPU_INFO"
+    fi
+    
+    if grep -q "Total GPU Memory:" "$LOG_FILE"; then
+        TOTAL_MEM=$(grep "Total GPU Memory:" "$LOG_FILE")
+        echo "$TOTAL_MEM"
+    fi
+    
+    # Extract recommendations
+    if grep -q "TRAINING RECOMMENDATIONS" "$LOG_FILE"; then
+        echo ""
+        echo "TRAINING RECOMMENDATIONS FOUND:"
+        # Show lines after "TRAINING RECOMMENDATIONS" header
+        awk '/TRAINING RECOMMENDATIONS/,/If you still get OOM/' "$LOG_FILE" | head -20
+    fi
+    
+    # Look for successful batch sizes
+    if grep -q "SUCCESS" "$LOG_FILE"; then
+        echo ""
+        echo "SUCCESSFUL CONFIGURATIONS:"
+        grep "SUCCESS" "$LOG_FILE" | tail -5
+    fi
+    
+    # Check for any OOM errors encountered during testing
+    if grep -q "OUT OF MEMORY" "$LOG_FILE"; then
+        echo ""
+        echo "OOM LIMITS FOUND:"
+        grep "OUT OF MEMORY" "$LOG_FILE" | tail -3
+    fi
+    
+else
+    echo "Memory test failed with exit code: $EXIT_CODE"
+    echo "Check log file for details: $LOG_FILE"
+    
+    # Show last few lines for debugging
+    echo ""
+    echo "Last 10 lines of error log:"
+    tail -10 "$LOG_FILE"
+fi
+
+echo "====================================="
+
+# =============================================================================
+# QUICK RECOMMENDATIONS SUMMARY
+# =============================================================================
+
+if [[ $EXIT_CODE -eq 0 ]]; then
+    echo ""
+    echo "QUICK SUMMARY FOR TRAINING SETUP:"
+    echo "=================================="
+    
+    # Try to extract the key numbers for easy reference
+    if grep -q "Recommended safe batch size:" "$LOG_FILE"; then
+        echo "Recommended batch sizes:"
+        grep "Recommended safe batch size:" "$LOG_FILE"
+    fi
+    
+    if grep -q "gradient_accumulation_steps=" "$LOG_FILE"; then
+        echo ""
+        echo "Gradient accumulation recommendations:"
+        grep "gradient_accumulation_steps=" "$LOG_FILE" | head -6
+    fi
+    
+    echo ""
+    echo "Use these values in your training LSF files!"
+fi
+
+# Clean up any temporary files
+rm -f /tmp/pytorch_*
+
+echo "Memory test job finished"
+exit $EXIT_CODE

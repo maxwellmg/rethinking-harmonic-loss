@@ -1,6 +1,3 @@
-# rethinking-harmonic-loss
- We extend harmonic loss beyond Euclidean distance by testing diverse metrics on vision and language models, showing that tailored variants can outperform cross-entropy and Euclidean, improving accuracy, interpretability, and sustainability
-
 In many cases, I run the runners with a separate py/lsf file combination, most of which set configs.
 
 Runners

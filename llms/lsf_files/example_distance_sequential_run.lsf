@@ -1,0 +1,218 @@
+#!/bin/bash
+
+#BSUB -J distance_comparison[1-11]%1
+#BSUB -o logs/distance_%I_%J.log
+#BSUB -e logs/distance_%I_%J.log
+#BSUB -q h100
+#BSUB -gpu "num=1:gmodel=NVIDIAH100PCIe"
+#BSUB -n 1
+#BSUB -R "span[ptile=1]"
+#BSUB -R "rusage[mem=64GB]"
+#BSUB -W 24:00
+#BSUB -u #add your email here
+#BSUB -B
+#BSUB -N
+
+# Create required directories
+mkdir -p logs
+mkdir -p distance_results
+
+# Set environment variables for stability
+export CUDA_VISIBLE_DEVICES=0
+export NCCL_DEBUG=WARN
+export PYTHONFAULTHANDLER=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:256
+export CUDA_LAUNCH_BLOCKING=1
+
+# Distributed training setup
+export MASTER_ADDR=localhost
+export MASTER_PORT=$(shuf -i 29000-29999 -n 1)
+
+echo "Using system-wide PyTorch installation"
+python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA available: {torch.cuda.is_available()}')"
+
+# Check GPU memory
+nvidia-smi
+
+# Define all distance configurations based on your if/elif code
+case $LSB_JOBINDEX in
+    1)
+        DISTANCE="baseline"
+        ;;
+    2)
+        DISTANCE="euclidean"
+        ;;
+    3)
+        DISTANCE="manhattan_fast"
+        ;;
+    4)
+        DISTANCE="cosine_simple"
+        ;;
+    5)
+        DISTANCE="cosine_temp_scale_0_1"
+        ;;
+    6)
+        DISTANCE="cosine_temp_scale_0_5"
+        ;;
+    7)
+        DISTANCE="cosine_temp_scale_1_0"
+        ;;
+    8)
+        DISTANCE="mahalanobis_diagonal"
+        ;;
+    9)
+        DISTANCE="mahalanobis_cholesky"
+        ;;
+    10)
+        DISTANCE="mahalanobis_standard"
+        ;;
+    11)
+        DISTANCE="minkowski_l2"
+        ;;
+    *)
+        echo "Invalid job index: $LSB_JOBINDEX (must be 1-11)"
+        exit 1
+        ;;
+esac
+
+WANDB_PROJECT="name_of_your_project_here"
+WANDB_RUN_NAME="${DISTANCE}_array_${LSB_JOBINDEX}"
+STEPS=10000
+#consider running helper > model_distance_agnostic_memory_test.py to see memory constraints
+BATCH_SIZE=32
+GRAD_ACCUM=4
+
+echo "=========== JOB START INFO ==========="
+echo "Job Array Index: $LSB_JOBINDEX"
+echo "Job ID: $LSB_JOBID"
+echo "Distance Type: $DISTANCE"
+echo "WandB Run Name: $WANDB_RUN_NAME"
+echo "Host: $(hostname)"
+echo "Date: $(date)"
+echo "Working Directory: $(pwd)"
+echo "MASTER_ADDR: $MASTER_ADDR"
+echo "MASTER_PORT: $MASTER_PORT"
+echo "Steps: $STEPS"
+echo "Batch Size: $BATCH_SIZE"
+echo "Gradient Accumulation: $GRAD_ACCUM"
+if [[ -n "$EXTRA_ARGS" ]]; then
+    echo "Extra Args: $EXTRA_ARGS"
+fi
+echo "======================================"
+
+# Check if training script exists
+if [[ ! -f "train_adam_distances_loss_gpt_bert_qwen.py" ]]; then
+    echo "ERROR: train_adam_distances_loss_gpt_bert_qwen.py not found in $(pwd)"
+    echo "Directory contents:"
+    ls -la
+    exit 1
+fi
+
+# Check if config exists
+if [[ ! -f "config/config.py" ]]; then
+    echo "ERROR: config/config.py not found"
+    echo "Available configs:"
+    find . -name "*.py" -path "*/config*" 2>/dev/null || echo "No config files found"
+    exit 1
+fi
+
+
+if [[ $? -ne 0 ]]; then
+    echo "Configuration validation failed - exiting"
+    exit 1
+fi
+
+echo "Starting training with $DISTANCE configuration..."
+
+# Execute with error handling and timeout
+timeout 12h torchrun \
+    --nnodes=1 \
+    --nproc_per_node=1 \
+    --rdzv_id=$LSB_JOBID \
+    --rdzv_backend=c10d \
+    --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
+    train_adam_distances_loss_gpt_bert_qwen.py \
+    --distance=$DISTANCE \
+    --batch_size=$BATCH_SIZE \
+    --gradient_accumulation_steps=$GRAD_ACCUM \
+    --max_iters=$STEPS \
+    --eval_interval=1000 \
+    --log_interval=1 \
+    --wandb_project=$WANDB_PROJECT \
+    --wandb_run_name=$WANDB_RUN_NAME \
+    config/config.py \
+    2>&1 | tee distance_results/${DISTANCE}_${LSB_JOBINDEX}.log
+
+# Capture exit code
+EXIT_CODE=${PIPESTATUS[0]}
+
+# Handle timeout case
+if [[ $EXIT_CODE -eq 124 ]]; then
+    echo "Training timed out after 24 hours"
+    EXIT_CODE=124
+fi
+
+echo "=========== JOB COMPLETE ==========="
+echo "Distance Type: $DISTANCE"
+echo "Exit Code: $EXIT_CODE"
+echo "Date: $(date)"
+echo "Log Location: distance_results/${DISTANCE}_${LSB_JOBINDEX}.log"
+
+# Quick analysis of training results
+if [[ $EXIT_CODE -eq 0 ]]; then
+    echo "Training completed successfully"
+    
+    # Check for common issues in the log
+    LOG_FILE="distance_results/${DISTANCE}_${LSB_JOBINDEX}.log"
+    
+    if grep -q "GRADIENT EXPLOSION\|gradient explosion\|NaN\|nan" "$LOG_FILE"; then
+        echo "GRADIENT EXPLOSION or NaN detected!"
+    elif grep -q "CUDA out of memory\|OutOfMemoryError\|out of memory" "$LOG_FILE"; then
+        echo "GPU OUT OF MEMORY detected!"
+    elif grep -q "AssertionError\|assertion" "$LOG_FILE"; then
+        echo "ASSERTION ERROR detected - check configuration!"
+    elif grep -q "loss.*inf\|loss.*nan\|inf\|nan" "$LOG_FILE"; then
+        echo "⚠️  Infinite or NaN loss detected!"
+    elif grep -q "RuntimeError\|Exception\|Error" "$LOG_FILE"; then
+        echo "⚠️  Runtime errors detected - check log"
+    elif grep -q "Traceback" "$LOG_FILE"; then
+        echo "⚠️  Python traceback detected - check log"
+    else
+        # Try to extract final loss if available
+        FINAL_LOSS=$(grep -o "train loss [0-9]*\.[0-9]*" "$LOG_FILE" | tail -1 | grep -o "[0-9]*\.[0-9]*")
+        if [[ -n "$FINAL_LOSS" ]]; then
+            echo "Final training loss: $FINAL_LOSS"
+        else
+            echo "No obvious issues detected"
+        fi
+    fi
+    
+    # Check training speed
+    if grep -q "tokens per second" "$LOG_FILE"; then
+        SPEED=$(grep "tokens per second" "$LOG_FILE" | tail -1)
+        echo "Training Speed: $SPEED"
+    fi
+    
+else
+    echo "Training failed with exit code: $EXIT_CODE"
+    echo "Check log file for details: distance_results/${DISTANCE}_${LSB_JOBINDEX}.log"
+    
+    # Show last few lines of error for quick debugging
+    echo ""
+    echo "Last 10 lines of error log:"
+    tail -10 distance_results/${DISTANCE}_${LSB_JOBINDEX}.log
+fi
+
+echo "==================================="
+
+if [[ $EXIT_CODE -eq 0 ]]; then
+    echo "SUMMARY FOR $DISTANCE:"
+    echo "   - Distance Type: $DISTANCE"
+    echo "   - Job Index: $LSB_JOBINDEX"
+    echo "   - WandB Run: $WANDB_RUN_NAME"
+    echo "   - Log File: distance_results/${DISTANCE}_${LSB_JOBINDEX}.log"
+    echo ""
+fi
+
+# Exit with the training script's exit code
+exit $EXIT_CODE

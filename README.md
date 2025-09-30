@@ -20,8 +20,8 @@ This repository provides code for training and evaluating models with **harmonic
 We extend harmonic loss beyond Euclidean distance, benchmarking multiple metrics across **vision backbones** and **large language models (LLMs)**.  
 
 The codebase supports reproducible experiments on:
-- **Language models** (GPT-style architectures, trained on OpenWebText)
-- **Vision models** (e.g., MNIST, CIFAR)
+- **Language models** (GPT, BERT, and QWEN architectures, trained on OpenWebText)
+- **Vision models** (MLP, CNN, ResNet50, and PVT backbones tested on MNIST, CIFAR10, and CIFAR100)
 - **Toy datasets** for exploring representation geometry and weight dynamics
 
 ## Why Harmonic Loss?
@@ -40,13 +40,9 @@ This repo generalizes it to multiple distance metrics (e.g., cosine, Bray–Curt
 
 │ └── train_adam_distances_loss.py # Runner file for GPT/BERT/Qwen with harmonic loss
 
-│
-
 ├── vision/ # Vision experiments
 
 │ └── run_with_configs.py # Runner file for CIFAR, MNIST, etc.
-
-│
 
 ├── toyset_and_weight_visualization/ # Toy datasets & weight analysis
 
@@ -55,8 +51,6 @@ This repo generalizes it to multiple distance metrics (e.g., cosine, Bray–Curt
 │ ├── mlp_visualization.py # Runner for MLP visualization experiments
 
 │ └── toy_circle.py # Runner for synthetic circle dataset
-
-│
 
 ├── results/figures/ # Generated figures and plots
 

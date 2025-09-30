@@ -5,7 +5,7 @@
 #BSUB -gpu "num=1:gmodel=NVIDIAL40"
 #BSUB -q normal                        # Number of CPU cores
 #BSUB -W 12:00                      # Walltime (4 hours max; adjust as needed)
-#BSUB -u mm9628a@american.edu       # Replace with your email
+#BSUB -u <input email here>         # Replace with your email
 #BSUB -B                            # Send email at the beginning of the job
 #BSUB -N                            # Send email at the end of the job
 

@@ -12,7 +12,6 @@ from collections import defaultdict
 colors = [ "#{:06x}".format(random.randint(0, 0xFFFFFF)) for i in range(1000)]
 
 def visualize_embedding(emb, title="", save_path=None, dict_level = None, color_dict=True, adjust_overlapping_text=False):
-    # adjustText is a library that cleans up overlapping text in the figure, which is helpful for permutation. Feel free to comment it out.
 
     pca = PCA(n_components=2)
     emb_pca = pca.fit_transform(emb.detach().numpy())
@@ -50,8 +49,6 @@ def visualize_embedding(emb, title="", save_path=None, dict_level = None, color_
     if save_path:
         plt.tight_layout()
         plt.savefig(save_path, bbox_inches='tight')
-    #plt.show()
-    #plt.close()
 
 def get_right_and_left_coset():
     s_12 = [1234, 2143, 3412, 4321, 3124, 2314, 4132, 2431, 4213, 3241, 1423, 1342]

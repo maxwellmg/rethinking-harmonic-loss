@@ -5,6 +5,7 @@ import numpy as np
 import glob
 import pandas as pd
 from codecarbon import EmissionsTracker
+from matplotlib.backends.backend_pdf import PdfPages
 
 CODECARBON_AVAILABLE = True
 
@@ -14,7 +15,6 @@ def setup_emissions_tracker(distance_name, emissions_dir, dataset):
         return None
     
     try:
-        # Ensure the emissions_data directory exists
         os.makedirs(emissions_dir, exist_ok=True)
                  
         tracker = EmissionsTracker(
@@ -30,12 +30,10 @@ def setup_emissions_tracker(distance_name, emissions_dir, dataset):
         return None
 
 def create_combined_visualization_cifar(results):
-    """Create three different PDF visualizations for CIFAR-10 weights:
-    1. Channel separation (RGB channels shown separately)
-    2. RGB composite (full color images)
-    3. Grayscale average (averaged channels, similar to MNIST approach)
-    """
-    from matplotlib.backends.backend_pdf import PdfPages
+    # Create three different PDF visualizations for CIFAR-10 weights:
+    # 1. Channel separation (RGB channels shown separately)
+    # 2. RGB composite (full color images)
+    # 3. Grayscale average (averaged channels, similar to MNIST approach)
     
     # Extract accuracy from the results dictionary structure
     sorted_results = sorted(
@@ -53,7 +51,6 @@ def create_combined_visualization_cifar(results):
     with PdfPages("../figures/cifar10_harmonic_weights_channels.pdf") as pdf:
         for distance_name, accuracy in sorted_results:
             try:
-                # Handle different model file naming for baseline vs distance layers
                 if distance_name == "baseline":
                     model_path = f"../results/cifar10_baseline.pth"
                 else:
@@ -213,10 +210,7 @@ def create_combined_visualization_cifar(results):
 
 def create_combined_visualization_mnist(results):
     """Create a combined PDF with all distance layer visualizations"""
-    from matplotlib.backends.backend_pdf import PdfPages
     
-    # Fix: Handle the new results format with dictionaries
-    # Extract accuracy from the results dictionary structure
     sorted_results = sorted(
         [(name, data['accuracy']) for name, data in results.items() 
          if data['accuracy'] is not None], 
@@ -254,89 +248,12 @@ def create_combined_visualization_mnist(results):
             except Exception as e:
                 print(f"Warning: Could not add {distance_name} to combined PDF: {e}")
 
-'''def consolidate_emissions_data(emissions_dir, results, dataset):
-    """Read individual emissions CSV files and consolidate with accuracy data"""
-    if not CODECARBON_AVAILABLE:
-        return None
-        
-    try:
-        # Find all emissions CSV files in the directory
-        emission_files = glob.glob(os.path.join(emissions_dir, "emissions_*.csv"))
-        
-        if not emission_files:
-            print("No emissions files found to consolidate")
-            return None
-        
-        consolidated_data = []
-        
-        for file_path in emission_files:
-            try:
-                # Extract distance layer name from filename
-                filename = os.path.basename(file_path)
-                distance_name = filename.replace("emissions_", "").replace(".csv", "")
-                
-                # Read the emissions CSV file
-                df = pd.read_csv(file_path)
-                
-                if not df.empty:
-                    # Get the last row (most recent measurement) for each distance layer
-                    last_row = df.iloc[-1].copy()
-                    
-                    # Add distance layer name, accuracy, and final epoch
-                    last_row['distance_layer'] = distance_name
-                    result_data = results.get(distance_name, {'accuracy': None, 'final_epoch': None})
-                    last_row['accuracy'] = result_data['accuracy']
-                    last_row['final_epoch'] = result_data['final_epoch']
-                    
-                    consolidated_data.append(last_row)
-                    
-            except Exception as e:
-                print(f"Warning: Could not process emissions file {file_path}: {e}")
-                continue
-        
-        if consolidated_data:
-            # Create consolidated DataFrame
-            consolidated_df = pd.DataFrame(consolidated_data)
-            
-            # Reorder columns to put distance_layer, accuracy, and final_epoch first
-            cols = consolidated_df.columns.tolist()
-            priority_cols = ['distance_layer', 'accuracy', 'final_epoch']
-            other_cols = [col for col in cols if col not in priority_cols]
-            consolidated_df = consolidated_df[priority_cols + other_cols]
-            
-            # Save consolidated file
-            consolidated_file = os.path.join(emissions_dir, f"emissions_consolidated_{dataset.lower()}.csv")
-            consolidated_df.to_csv(consolidated_file, index=False)
-            
-            print(f"\nConsolidated emissions data saved to: {consolidated_file}")
-            
-            # Clean up individual files after consolidation
-            print("Cleaning up individual emissions files...")
-            for file_path in emission_files:
-                try:
-                    os.remove(file_path)
-                    print(f"Removed: {os.path.basename(file_path)}")
-                except Exception as e:
-                    print(f"Warning: Could not remove {file_path}: {e}")
-            
-            return consolidated_df
-        else:
-            print("No valid emissions data found")
-            return None
-            
-    except Exception as e:
-        print(f"Warning: Could not consolidate emissions data: {e}")
-        return None
-'''
-
 def consolidate_emissions_data(emissions_dir, results, dataset):
     """Read individual emissions CSV files and consolidate with accuracy data"""
     if not CODECARBON_AVAILABLE:
         return None
         
     try:
-        # FIXED: Look for the correct pattern based on your actual filenames
-        # Your files: emissions_CIFAR10_baseline.csv, emissions_CIFAR10_euclidean.csv
         emission_files = glob.glob(os.path.join(emissions_dir, f"emissions_{dataset}_*.csv"))
         
         print(f"DEBUG: Looking for pattern: emissions_{dataset}_*.csv")
@@ -350,23 +267,17 @@ def consolidate_emissions_data(emissions_dir, results, dataset):
         
         for file_path in emission_files:
             try:
-                # FIXED: Extract distance layer name from filename
                 filename = os.path.basename(file_path)
                 print(f"DEBUG: Processing filename: {filename}")
                 
-                # For filename like "emissions_CIFAR10_euclidean.csv"
-                # Remove "emissions_CIFAR10_" and ".csv"
                 distance_name = filename.replace(f"emissions_{dataset}_", "").replace(".csv", "")
                 print(f"DEBUG: Extracted distance name: '{distance_name}'")
                 
-                # Read the emissions CSV file
                 df = pd.read_csv(file_path)
                 
                 if not df.empty:
-                    # Get the last row (most recent measurement) for each distance layer
                     last_row = df.iloc[-1].copy()
                     
-                    # Add distance layer name, accuracy, and final epoch
                     last_row['distance_layer'] = distance_name
                     last_row['dataset'] = dataset
                     result_data = results.get(distance_name, {'accuracy': None, 'final_epoch': None})
@@ -381,22 +292,17 @@ def consolidate_emissions_data(emissions_dir, results, dataset):
                 continue
         
         if consolidated_data:
-            # Create consolidated DataFrame
             consolidated_df = pd.DataFrame(consolidated_data)
             
-            # Reorder columns to put dataset, distance_layer, accuracy, and final_epoch first
             cols = consolidated_df.columns.tolist()
             priority_cols = ['dataset', 'distance_layer', 'accuracy', 'final_epoch']
             other_cols = [col for col in cols if col not in priority_cols]
-            # Only include priority columns that actually exist
             existing_priority_cols = [col for col in priority_cols if col in cols]
             consolidated_df = consolidated_df[existing_priority_cols + other_cols]
-            
-            # Save consolidated file
+
             consolidated_file = os.path.join(emissions_dir, f"emissions_consolidated_{dataset.lower()}.csv")
             consolidated_df.to_csv(consolidated_file, index=False)
             
-            # IMPORTANT: Verify the file was actually created before claiming success
             if os.path.exists(consolidated_file):
                 file_size = os.path.getsize(consolidated_file)
                 print(f"\nConsolidated {dataset} emissions data saved to: {consolidated_file}")
@@ -405,7 +311,6 @@ def consolidate_emissions_data(emissions_dir, results, dataset):
                 print(f"ERROR: Consolidated file was not created at {consolidated_file}")
                 return None
             
-            # FIXED: Only clean up individual files AFTER confirming consolidation succeeded
             print("Cleaning up individual emissions files...")
             for file_path in emission_files:
                 try:
@@ -431,18 +336,15 @@ def display_emissions_summary(consolidated_df):
     
     print("\nEmissions Summary:")
     
-    # Define which columns to display (common CodeCarbon columns)
     display_cols = ['distance_layer', 'accuracy', 'final_epoch']
     
-    # Add common emissions columns if they exist
     possible_cols = ['duration', 'emissions', 'emissions_rate', 'cpu_power', 'gpu_power', 
                     'ram_power', 'energy_consumed', 'timestamp']
     
     for col in possible_cols:
         if col in consolidated_df.columns:
             display_cols.append(col)
-    
-    # Create header
+
     header = ""
     col_widths = {}
     for col in display_cols:
@@ -459,7 +361,6 @@ def display_emissions_summary(consolidated_df):
     
     print(header)
     
-    # Display data rows
     for _, row in consolidated_df.iterrows():
         row_str = ""
         for col in display_cols:
@@ -477,7 +378,6 @@ def display_emissions_summary(consolidated_df):
                 else:
                     formatted_value = f"{value:.4f}"
             elif col == 'timestamp':
-                # Truncate timestamp for display
                 formatted_value = str(value)[:19] if str(value) != 'N/A' else 'N/A'
             else:
                 formatted_value = str(value)

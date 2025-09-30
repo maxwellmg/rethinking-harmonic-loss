@@ -7,9 +7,7 @@ Tests batch sizes and gradient accumulation for optimal configuration.
 import torch
 import torch.cuda
 import time
-import os
 import random
-from contextlib import nullcontext
 from model.GPT import GPTConfig, GPT
 from model.BERT import BertConfig, BERT
 from model.QWEN import QwenConfig, Qwen2

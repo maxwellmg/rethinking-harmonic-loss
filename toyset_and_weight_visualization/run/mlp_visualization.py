@@ -50,19 +50,12 @@ class SimpleNN(nn.Module):
             layer_name = distance_layer_class.__name__
             
             if dataset == "CIFAR10":
-                #if layer_name == 'MinkowskiDistLayer':
-                    # Changed from 28*28 (784) to 32*32*3 (3072) for CIFAR-10
-                    #self.fc1 = distance_layer_class(32 * 32 * 3, 10, p=2.0, n=32., eps=1e-3)
                 if layer_name == 'MinkowskiDistLayer':
                     self.fc1 = distance_layer_class(32 * 32 * 3, 10, p=1.5, n=1.0, eps=1e-1)  # Changed
-                #elif layer_name == 'MahalanobisDistLayer':
-                    #self.fc1 = distance_layer_class(32 * 32 * 3, 10, n=32., learn_cov=False, eps=1e-3)
                 elif layer_name == 'MahalanobisDistLayer':
                     self.fc1 = distance_layer_class(32 * 32 * 3, 10, n=0.1, learn_cov=False, eps=1e-1)  # Changed
                 elif layer_name == 'MahalanobisDistLayerCholesky':
                     self.fc1 = distance_layer_class(32 * 32 * 3, 10, n=1.0, eps=1e-2)
-                #elif layer_name == 'MahalanobisDistLayerDiagonal':
-                    #self.fc1 = distance_layer_class(32 * 32 * 3, 10, n=32., eps=1e-3)
                 elif layer_name == 'MahalanobisDistLayerDiagonal':
                     self.fc1 = distance_layer_class(32 * 32 * 3, 10, n=0.1, eps=1e-1)
                 elif layer_name == 'HammingDistLayer':
@@ -81,7 +74,6 @@ class SimpleNN(nn.Module):
                 elif layer_name == 'BrayCurtisDistLayer':
                     self.fc1 = distance_layer_class(32 * 32 * 3, 10, n=0.1, eps=1e-1)  # Changed
                 else:
-                    # Default case - changed n parameter from 28 to 32
                     self.fc1 = distance_layer_class(32 * 32 * 3, 10, n=32.)
 
             elif dataset == "MNIST":
@@ -90,44 +82,34 @@ class SimpleNN(nn.Module):
                 elif layer_name == 'MahalanobisDistLayer':
                     self.fc1 = distance_layer_class(28 * 28, 10, n=28., learn_cov=False, eps=1e-3)
                 elif layer_name == 'MahalanobisDistLayerCholesky':
-                    # Try with much smaller n and higher eps for stability
                     self.fc1 = distance_layer_class(28 * 28, 10, n=1.0, eps=1e-2)
                 elif layer_name == 'MahalanobisDistLayerDiagonal':
                     self.fc1 = distance_layer_class(28 * 28, 10, n=28., eps=1e-3)
                 elif layer_name == 'HammingDistLayer':
-                    # Try with much smaller n and no threshold
                     try:
                         self.fc1 = distance_layer_class(28 * 28, 10, n=1.0, eps=1e-2)
                     except:
-                        # Fallback if threshold parameter is required
                         self.fc1 = distance_layer_class(28 * 28, 10, n=1.0, threshold=0.0, eps=1e-2)
                 elif layer_name == 'HammingDistLayerSoft':
                     self.fc1 = distance_layer_class(28 * 28, 10, n=1.0, temperature=10.0, eps=1e-2)
                 elif layer_name == 'HammingDistLayerGumbel':
-                    # Try with very high temperature and small n
                     self.fc1 = distance_layer_class(28 * 28, 10, n=1.0, temperature=50.0, eps=1e-2)
                 elif layer_name == 'CanberraDistLayer':
-                    # Try with much smaller n for stability
                     self.fc1 = distance_layer_class(28 * 28, 10, n=1.0, eps=1e-1)
                 elif layer_name == 'CanberraDistLayerRobust':
-                    # Use much higher min_denom and smaller n
                     self.fc1 = distance_layer_class(28 * 28, 10, n=1.0, min_denom=1e-1, eps=1e-2)
                 else:
-                    # Default case for layers that work with n parameter
                     self.fc1 = distance_layer_class(28 * 28, 10, n=28.)
         else:
             if dataset == "CIFAR10":
                 self.fc1 = nn.Linear(32 * 32 * 3, 10)
             elif dataset == "MNIST":
                 self.fc1 = nn.Linear(28 * 28, 10)
-        #nn.init.normal_(self.fc1.weight, mean=0, std=1/28.)
-        
-        # Updated weight initialization std from 1/28 to 1/32
+
         nn.init.normal_(self.fc1.weight, mean=0, std=1/32.)
 
     def forward(self, x):
         if dataset == "CIFAR10":
-            # Changed from 28*28 to 32*32*3 for flattening
             x = x.view(-1, 32 * 32 * 3)  # Flatten the input
             x = self.fc1(x)
             if self.harmonic:
@@ -144,7 +126,6 @@ class SimpleNN(nn.Module):
                 return logits
             return x
 
-# 3. Update data loading section in train_and_evaluate function
 def train_and_evaluate(distance_name, distance_layer_class=None, is_baseline=False):
     """Train and evaluate model with specific distance layer or baseline"""
     if is_baseline:
@@ -162,11 +143,6 @@ def train_and_evaluate(distance_name, distance_layer_class=None, is_baseline=Fal
     # Original MNIST Hyperparameters
     batch_size = 64
     learning_rate = 0.001
-    #max_epochs = 10
-
-    # Potential CIFAR Hyperparameters
-    # batch_size = 64  # Could increase to 128 or 256
-    # learning_rate = 0.001  # Might need adjustment
     max_epochs = 10  # Might need more epochs for CIFAR-10
     
     # Load datasets
@@ -175,11 +151,6 @@ def train_and_evaluate(distance_name, distance_layer_class=None, is_baseline=Fal
         transforms.ToTensor(),
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))  # CIFAR-10 normalization
         ])
-
-        # Alternative simpler transform (similar to original MNIST approach):
-        # transform = transforms.Compose([
-        #     transforms.ToTensor()
-        # ])
 
         train_dataset = datasets.CIFAR10(root="./data", train=True, transform=transform, download=True)
         test_dataset = datasets.CIFAR10(root="./data", train=False, transform=transform, download=True)
@@ -289,26 +260,15 @@ def train_and_evaluate(distance_name, distance_layer_class=None, is_baseline=Fal
             model_path = f"../results/mnist_harmonic_{distance_name}.pth"
         torch.save(model.state_dict(), model_path)
     
-    # Create weight visualization
-    '''if is_baseline:
-        create_weight_visualization("baseline", model_path, accuracy)
-    else:
-        create_weight_visualization(distance_name, model_path, accuracy)'''
-    
     return accuracy, final_epoch
 
-# 5. Update results file name
 def main():
-    # Create results directory if it doesn't exist
     os.makedirs("../results", exist_ok=True)
     
-    # Setup emissions directory
     emissions_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "emissions_data")
     
-    # Store results
     results = {}
     
-    # First, run the baseline model
     print("Starting baseline model training...")
     tracker = setup_emissions_tracker("baseline", emissions_dir, dataset=dataset)  # Individual tracking
     
@@ -324,7 +284,6 @@ def main():
         print(f"Error training baseline model: {str(e)}")
         results["baseline"] = {'accuracy': None, 'final_epoch': None}
     
-    # Stop emissions tracking for baseline
     if tracker:
         try:
             tracker.stop()
@@ -332,9 +291,7 @@ def main():
         except Exception as stop_error:
             print(f"Warning: Could not stop emissions tracker for baseline: {stop_error}")
     
-    # Loop through all distance configurations
     for distance_name, distance_layer_class in distance_configs.items():
-        # Setup individual tracker for each distance layer
         tracker = setup_emissions_tracker(distance_name, emissions_dir, dataset=dataset)
         
         if tracker:
@@ -357,12 +314,10 @@ def main():
             except Exception as stop_error:
                 print(f"Warning: Could not stop emissions tracker for {distance_name}: {stop_error}")
     
-    # Print summary of results
     print("\n")
     print("SUMMARY OF RESULTS")
     print("\n")
     
-    # Sort results by accuracy (descending)
     sorted_results = sorted([(name, data['accuracy']) for name, data in results.items() if data['accuracy'] is not None], 
                            key=lambda x: x[1], reverse=True)
     
@@ -373,13 +328,11 @@ def main():
         final_epoch = results[distance_name]['final_epoch']
         print(f"{distance_name:<25} {accuracy:>8.2f}%     {final_epoch:>8}")
     
-    # Print failed experiments
     failed = [name for name, data in results.items() if data['accuracy'] is None]
     if failed:
         print(f"\nFailed experiments: {', '.join(failed)}")
     
-    # Save results to file
-    with open(f"../results/{dataset}_distance_comparison_results.txt", "w") as f:  # Changed filename
+    with open(f"../results/{dataset}_distance_comparison_results.txt", "w") as f:
         f.write("CIFAR-10 Distance Layer Comparison Results\n") 
         f.write("\n\n")
         f.write(f"{'Distance Layer':<25} {'Accuracy (%)':<12} {'Final Epoch':<12}\n")
@@ -398,7 +351,6 @@ def main():
     elif dataset == "MNIST":
         create_combined_visualization_mnist(results)
     
-    # Consolidate emissions data and clean up individual files
     if CODECARBON_AVAILABLE:
         consolidated_df = consolidate_emissions_data(emissions_dir, results, dataset)
         display_emissions_summary(consolidated_df)

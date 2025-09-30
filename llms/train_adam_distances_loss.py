@@ -11,7 +11,6 @@ from torch.distributed import init_process_group, destroy_process_group
 from codecarbon import EmissionsTracker
 from config.config import *
 from utils.gradient_check import check_gradients
-import importlib
 import sys
 import pandas as pd
 from datetime import datetime
@@ -23,11 +22,8 @@ from model.GPT import GPT, GPTConfig  # Specific GPT imports
 from model.BERT import BERT, BertConfig  # Specific BERT imports
 from model.QWEN import Qwen2, QwenConfig
 
-import warnings
 from typing import Union, Iterable, List, Dict, Tuple, Optional
 
-import torch
-from torch import Tensor, inf
 
 hostname = socket.gethostname()
 

@@ -1,7 +1,4 @@
 import math
-import inspect
-from dataclasses import dataclass
-
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -85,17 +82,6 @@ class MLP(nn.Module):
         self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
         self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
-
-# trying without fillnan here as well
-    '''def forward(self, x):
-        x = self.c_fc(x)
-        x = fillnan(x)
-        x = new_gelu(x)
-        x = fillnan(x)
-        x = self.c_proj(x)
-        x = fillnan(x)
-        x = self.dropout(x)
-        return x'''
         
     def forward(self, x):
         x = self.c_fc(x)

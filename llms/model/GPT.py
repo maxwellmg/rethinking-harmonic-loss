@@ -1,7 +1,5 @@
 import math
-import inspect
 from dataclasses import dataclass
-
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -141,17 +139,6 @@ class GPT(nn.Module):
         if non_embedding:
             n_params -= self.transformer.wpe.weight.numel()
         return n_params
-
-    '''def _init_weights(self, module):
-        if isinstance(module, nn.Linear):
-            scale = 1/math.sqrt(self.n_embd)/0.0357*0.02
-            torch.nn.init.normal_(module.weight, mean=0.0, std=scale)
-            if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.Embedding):
-            scale = 1/math.sqrt(self.n_embd)/0.0357*0.02
-            torch.nn.init.normal_(module.weight, mean=0.0, std=scale)'''
-
 
     def _init_weights(self, module):
         """Fixed weight initialization to prevent gradient explosion"""
@@ -363,13 +350,7 @@ class GPT(nn.Module):
                 elif pn.endswith('weight') and isinstance(m, blacklist_weight_modules):
                     # weights of blacklist modules will NOT be weight decayed
                     no_decay.add(fpn)
-
-        # subtle: 'transformer.wte.weight' and 'lm_head.weight' are tied, so they
-        # will appear in the no_decay and decay sets respectively after the above.
-        # In addition, because named_parameters() doesn't return duplicates, it
-        # will only return the first occurrence, key'd by 'transformer.wte.weight', below.
-        # so let's manually remove 'lm_head.weight' from decay set. This will include
-        # this tensor into optimization via transformer.wte.weight only, and not decayed.
+                    
         decay.remove('lm_head.weight')
 
         # validate that we considered every parameter

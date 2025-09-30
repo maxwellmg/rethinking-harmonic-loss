@@ -3,138 +3,12 @@ import torch
 import torch.optim as optim
 import random
 import numpy as np
-import math
 from dataset import *
 from visualization import *
 from distlayers import *
-
 import sys
-# import keyboard
-
 from tqdm import tqdm
-
 import torch.nn.functional as F
-
-class CustomLosses:
-    @staticmethod
-    def contrastive_loss(output, target, margin=1.0):
-        """
-        Computes contrastive loss with pairwise distance computation.
-
-        Args:
-            output (Tensor): Embeddings of shape (batch_size, embedding_dim).
-            target (Tensor): Labels of shape (batch_size,).
-            margin (float): Margin for contrastive loss.
-
-        Returns:
-            Tensor: Contrastive loss value.
-        """
-        batch_size = output.size(0)
-
-        # Compute pairwise squared Euclidean distances
-        distances = torch.cdist(output, output, p=2)  # Shape: (batch_size, batch_size)
-
-        # Mask to extract positive pairs (same class)
-        target_matrix = target.unsqueeze(1) == target.unsqueeze(0)  # Shape: (batch_size, batch_size)
-        pos_mask = target_matrix.fill_diagonal_(False)  # Exclude self-comparisons
-
-        # Mask to extract negative pairs (different class)
-        neg_mask = ~target_matrix
-
-        # Compute positive loss
-        pos_distances = distances * pos_mask  # Only keep positive pairs
-        pos_loss = torch.sum(pos_distances ** 2) / (pos_mask.sum() + 1e-8)  # Prevent division by zero
-
-        # Compute negative loss
-        neg_distances = distances * neg_mask  # Only keep negative pairs
-        neg_loss = torch.sum(F.relu(margin - neg_distances) ** 2) / (neg_mask.sum() + 1e-8)
-
-        # Total contrastive loss
-        loss = pos_loss + neg_loss
-        return loss
-
-    
-    @staticmethod
-    def constant_margin_loss(output, target, margin=1.0):
-        distances = torch.norm(output, dim=1)
-        loss = torch.mean(torch.clamp(margin - distances, min=0.0))
-        return loss
-    
-    @staticmethod
-    def spherical_loss(output, target, epsilon=1e-4):
-        """
-        Compute the spherical softmax loss as defined in the paper.
-        
-        Args:
-            output: Tensor of shape (batch_size, num_classes) - pre-activations (logits)
-            target: Tensor of shape (batch_size,) - target class indices
-            epsilon: float - small constant for numerical stability
-            
-        Returns:
-            The spherical softmax loss
-        """
-        # First L2 normalize the outputs along the class dimension (spherical projection)
-        normalized_output = F.normalize(output, p=2, dim=1)  # σ_i = o_i / ||o||
-        
-        # Compute squared normalized outputs plus epsilon
-        squared_normalized = normalized_output.pow(2) + epsilon  # σ_i² + ϵ
-        
-        # Compute spherical softmax probabilities
-        probabilities = squared_normalized / squared_normalized.sum(dim=1, keepdim=True)
-        
-        # Gather the probabilities of the target classes
-        target_probs = probabilities.gather(1, target.unsqueeze(1)).squeeze(1)
-        
-        # Compute negative log likelihood
-        loss = -torch.log(target_probs)
-        
-        return loss.mean()
-
-    
-    @staticmethod
-    def soft_nearest_neighbor_loss(output, target, temperature=0.1):
-        """
-        Robust implementation of soft nearest neighbor loss.
-        
-        Args:
-            output: Tensor of shape (batch_size, embedding_dim) - the embeddings
-            target: Tensor of shape (batch_size,) - the class labels
-            temperature: float - temperature parameter
-            
-        Returns:
-            The soft nearest neighbor loss as a scalar tensor
-        """
-        batch_size = output.size(0)
-        if batch_size == 0:
-            return torch.tensor(0.0, device=output.device)
-        
-        # Compute pairwise squared Euclidean distances in a numerically stable way
-        output_normalized = F.normalize(output, p=2, dim=1)
-        cos_similarity = torch.mm(output_normalized, output_normalized.t())
-        distances = 2 - 2 * cos_similarity  # converts cosine similarity to squared Euclidean
-        
-        # Compute exponential terms with temperature
-        exp_terms = torch.exp(-distances / temperature)
-        
-        # Create mask for same-class pairs (excluding self)
-        same_class = target.unsqueeze(1) == target.unsqueeze(0)
-        same_class.fill_diagonal_(False)  # exclude self-comparisons
-        
-        # Compute numerator and denominator
-        numerator = torch.sum(exp_terms * same_class, dim=1)
-        denominator = torch.sum(exp_terms, dim=1) - 1  # subtract 1 to exclude self
-        
-        # Handle cases where numerator might be zero (no same-class neighbors)
-        safe_ratio = torch.where(
-            numerator > 0,
-            numerator / denominator,
-            torch.ones_like(numerator) * 1e-8  # small value when no same-class neighbors
-        )
-        
-        # Compute loss and return mean
-        losses = -torch.log(safe_ratio)
-        return torch.mean(losses)
-
 
 class customNNModule(nn.Module):
     def __init__(self, loss_type):
@@ -142,15 +16,7 @@ class customNNModule(nn.Module):
         self.loss_type = loss_type
     
     def compute_loss(self, outputs, targets):
-        if self.loss_type == 'contrastive':
-            return CustomLosses.contrastive_loss(outputs, targets)
-        elif self.loss_type == 'constant_margin':
-            return CustomLosses.constant_margin_loss(outputs, targets)
-        elif self.loss_type == 'spherical':
-            return CustomLosses.spherical_loss(outputs, targets)
-        elif self.loss_type == 'soft_nn':
-            return CustomLosses.soft_nearest_neighbor_loss(outputs, targets)
-        elif self.loss_type == 'harmonic':
+        if self.loss_type == 'harmonic':
             return (-1)*(outputs[torch.arange(outputs.size(0)), targets.squeeze()].mean())
         elif self.loss_type == 'cross_entropy': # Cross-Entropy Loss
             return nn.CrossEntropyLoss()(outputs, targets.squeeze())
@@ -184,10 +50,7 @@ class customNNModule(nn.Module):
         optimizer = optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=weight_decay)
         lamb_reg = 0.01 if 'lambda' not in param_dict else param_dict['lambda']
         for epoch in tqdm(range(num_epochs)):
-            # if keyboard.is_pressed('ctrl+d'):
-            #     print("Manual early stopping occurring.")
-            #     break
-            if video and epoch%10 == 0: # save every 10 epochs
+            if video and epoch%10 == 0:
                 if hasattr(self.embedding, 'weight'):
                     embd = self.embedding.weight
                 else:
@@ -202,16 +65,6 @@ class customNNModule(nn.Module):
                 batch_targets = batch_targets.type(torch.LongTensor).to(device)
                 optimizer.zero_grad()
                 outputs = self.forward(batch_inputs)
-
-#               class_counts = torch.bincount(batch_targets.squeeze(), minlength=self.vocab_size).double() + 1e-8
-#               class_weights = 1 / class_counts.cuda()
-
-                # criterion = nn.CrossEntropyLoss()#weight=class_weights)
-                # if 'H_' in model_id: # Harmonic Model
-                #     loss = (-1)*(outputs[torch.arange(outputs.size(0)), batch_targets.squeeze()].mean())
-                # else:
-                # loss = criterion(outputs, batch_targets.squeeze())
-
                 loss = self.compute_loss(outputs, batch_targets)
                 
                 if hasattr(self.embedding, 'weight'):
@@ -256,18 +109,11 @@ class customNNModule(nn.Module):
             test_accuracies.append(test_correct / test_total)
 
             epoch_loss = train_loss / len(train_dataloader)
-            # Check for convergence
             if best_loss - epoch_loss > min_delta:
                 best_loss = epoch_loss
                 counter = 0  # Reset counter if there's an improvement
             else:
                 counter += 1  # Increment counter if no improvement
-
-            '''
-            if counter >= patience:
-                print("Early stopping triggered!")
-                break
-            '''
 
         ret_dic = {}
         ret_dic['train_losses'] = train_losses
@@ -277,7 +123,6 @@ class customNNModule(nn.Module):
 
         return ret_dic
 
-    
 
 class MLP(customNNModule):
     def __init__(self, shp, vocab_size, embd_dim, input_token=2, init_scale=1., unembd=False, weight_tied=False, seed=0, loss_type='cross_entropy'):
@@ -295,8 +140,6 @@ class MLP(customNNModule):
         
         self.embedding = nn.Embedding(vocab_size, embd_dim)
         nn.init.normal_(self.embedding.weight, mean=0, std=1/np.sqrt(embd_dim))
-#        self.embedding = torch.nn.Parameter(torch.normal(0,1/torch.tensor(embd_dim),size=(vocab_size, embd_dim))*init_scale)
-        #self.embedding = torch.nn.Parameter(torch.normal(0,1,size=(vocab_size, embd_dim))*init_scale)
         self.linears = nn.ModuleList(linear_list)
         self.shp = shp
         
@@ -311,7 +154,6 @@ class MLP(customNNModule):
         if unembd:
             assert shp[-2] == embd_dim
             if weight_tied:
-                #self.linears[-1].weight = self.embedding
                 self.embedding = self.linears[-1].weight
 
     def id2embd(self, data_id):
@@ -321,7 +163,6 @@ class MLP(customNNModule):
     
     def forward(self, x):
         x = self.id2embd(x)
-#        print(torch.sqrt(torch.mean(x**2)))
         f = torch.nn.SiLU()
         for i in range(self.depth-1):
             x = self.linears[i](x)
@@ -352,8 +193,6 @@ class MLP_HS_Euclidean(customNNModule):
         
         self.embedding = nn.Embedding(vocab_size, embd_dim)
         nn.init.normal_(self.embedding.weight, mean=0, std=1/np.sqrt(embd_dim)*init_scale)
-        #self.embedding = torch.nn.Parameter(torch.normal(0,1/torch.tensor(embd_dim),size=(vocab_size, embd_dim))*init_scale)
-#        self.embedding = torch.nn.Parameter(torch.normal(0,1,size=(vocab_size, embd_dim))*init_scale)
         self.linears = nn.ModuleList(linear_list)
         self.shp = shp
         
@@ -407,7 +246,6 @@ class MLP_HS_Manhattan(customNNModule):
             if i < self.depth - 1:
                 linear_list.append(nn.Linear(shp[i], shp[i+1]))
             else:
-                # Use Manhattan distance layer instead of Euclidean
                 linear_list.append(ManhattanDistLayer(shp[i], shp[i+1], n=n))
         
         self.embedding = nn.Embedding(vocab_size, embd_dim)
@@ -434,7 +272,6 @@ class MLP_HS_Manhattan(customNNModule):
         return self.embedding[data_id].reshape(batch,-1)
 
     def forward(self, x):
-        """CRITICAL: This is the missing forward method!"""
         x = self.id2embd(x)
         f = torch.nn.SiLU()
         for i in range(self.depth-1):
@@ -449,11 +286,8 @@ class MLP_HS_Manhattan(customNNModule):
         return logits
     
     def pred_logit(self, x):
-        """Prediction method"""
         return self.forward(x)
 
-
-# Corresponding MLP class for cosine distance
 class MLP_HS_Cosine(customNNModule):
     def __init__(self, shp, vocab_size, embd_dim, input_token=2, init_scale=1., 
                  weight_tied=True, n=1., seed=0, loss_type="harmonic"):

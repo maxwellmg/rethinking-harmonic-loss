@@ -62,6 +62,7 @@ Tested with Python ≥ 3.8 and PyTorch ≥ 1.12.
 
   HTTPS:
     git clone https://github.com/maxwellmg/rethinking-harmonic-loss.git
+    cd rethinking-harmonic-loss
 
 3. Install dependencies:
 
@@ -86,10 +87,31 @@ Datasets (MNIST, CIFAR10, CIFAR100) are downloaded automatically via torchvision
 
 Train a GPT/BERT/Qwen model with harmonic loss:
 
-1. (Highly recommended) Run 
-python llms/train_adam_distances_loss_gpt_bert_qwen.py --config config/config.py
+1. (Highly recommended) Run the model_distance_agnostic_memory_test.py (with or without the helper lsf file) to determine an ideal batch size and gradient accumulation given your system's constraints
 
-Vision Models
+  Note: if you don't use the given lsf file, the test will automatically run for GPT, BERT, and QWEN on a cross-entropy loss baseline.
+
+2. (Highly recommended) Review config/config.py to specify specific parameters for your run. This includes, but is not limited to:
+  a. adding in the results of the memory test (to avoid cuda OOM errors)
+  b. choosing between gpt, bert, and qwen backbones
+  c. setting length of experiment with "max_iters", etc.
+
+3. (Recommended) Sign up for an account with WandB to see the training data in real time
+
+4. Run:
+  python llms/train_adam_distances_loss_gpt_bert_qwen.py
+
+
+#### Vision Models
+1. (Recommended) Set your configs in run_with_configs.py. The program will loop over lists of inputs depending on the test you wish to run. Thus, you should set:
+  a. What hardware to run on based on personal constraints
+  b. The number of desired epochs (default values pulled from config/regular_config.py)
+  c. Dataset/s
+  d. Model type/s
+  e. Seed/s
+  f. DistLayer distances (under 'distance_layer_types')
+  g. Regularizer distances and lambdas (under 'distance_types'. Recommended to keep the default)
+
 python vision/run_with_configs.py --dataset cifar10 --loss harmonic_cosine
 
 

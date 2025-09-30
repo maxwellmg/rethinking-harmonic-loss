@@ -4,10 +4,11 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from custom_config_runs.regular_config import regular_config
-from Run.main_run_function import run_experiment
+from run.main_run_function import run_experiment
 
 if torch.cuda.is_available():
     hardware = "h100"
+    # replace with your available hardware
 else:
     hardware = "cpu"
 
@@ -16,13 +17,13 @@ test_config = {
     'override_epochs': None,
     'seed_list': [42],
     'lambda_values': [0.0],
-    # [0.1, 0.25, 0.5, 0.75, 1, 1.25]
-    'datasets': ['MNIST', 'CIFAR10', 'CIFAR100'],
-    #,'MNIST', 'CIFAR10', 'CIFAR100'
+    # Options: [0.1, 0.25, 0.5, 0.75, 1, 1.25]
+    'datasets': ['MNIST'],
+    # Options: ['MNIST', 'CIFAR10', 'CIFAR100']
     'distance_types': ['baseline'],
-    #'distance_types': ['baseline', 'euclidean', 'manhattan', 'cosine', 'minkowski', 'chebyshev', 'canberra', 'bray-curtis', 'hamming_mean', 'hamming_median', 'mahalanobis1', 'mahalanobis2']
-    'model_types': ['MNIST'],
-    #'ViT', 'PVT', 'MLP', 'CNN', 'VGG16', 'ResNet50'
+    # Options: ['baseline', 'euclidean', 'manhattan', 'cosine', 'minkowski', 'chebyshev', 'canberra', 'bray-curtis', 'hamming_mean', 'hamming_median', 'mahalanobis1', 'mahalanobis2']
+    'model_types': ['MLP'],
+    # Options: ['ViT', 'PVT', 'MLP', 'CNN', 'VGG16', 'ResNet50']
 
     'distance_layer_types': [
         # Baseline
@@ -31,7 +32,6 @@ test_config = {
         # Basic distances
         'euclidean',
         'manhattan',
-
 
         # Cosine variants
         'cosine_stable',

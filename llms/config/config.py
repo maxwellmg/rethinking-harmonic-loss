@@ -10,7 +10,7 @@ wandb_log = True
 out_dir = 'out'
 eval_only = False
 always_save_checkpoint = True
-init_from = 'scratch'  # 'scratch', 'resume', 'gpt2*', or 'bert*'
+init_from = 'scratch'
 
 # ===== DATA SETTINGS =====
 dataset = 'openwebtext'
@@ -33,14 +33,13 @@ batch_size = 16
 gradient_accumulation_steps = 8  # Effective batch size = 128
 
 # ===== LEARNING RATE AND OPTIMIZATION =====
-# Different learning rates often work better for different architectures
-learning_rate = 2e-4   # Good middle ground for both GPT and BERT
+learning_rate = 2e-4 
 min_lr = 2e-6
 warmup_iters = 500'''
 
 '''# ===== BATCH SIZE AND GRADIENT ACCUMULATION (FOR BERT) =====
-batch_size = 38        # Safe batch size from your test results
-gradient_accumulation_steps = 2  # For effective batch size of 76'''
+batch_size = 38  
+gradient_accumulation_steps = 2 '''
 
 # ===== BATCH SIZE AND GRADIENT ACCUMULATION (FOR QWEN) =====
 batch_size = 6        # Safe batch size from your test results
@@ -110,7 +109,6 @@ architecture_configs = {
     },
     'bert': {
         'max_position_embeddings': 512,  # BERT's standard max length
-        #'default_vocab_size': 30522,
         'default_vocab_size': 50304,
         'learning_rate': 1e-4,           # BERT often needs lower LR
         'warmup_iters': 1000,            # BERT benefits from longer warmup
@@ -121,17 +119,17 @@ architecture_configs = {
         'gradient_accumulation_steps': 2,
     },
     'qwen': {
-        'vocab_size': 151936,  # Fixed: use : not =
-        'max_position_embeddings': 1024,  # Fixed: use static value, not variable
-        'n_layer': 24,  # Fixed: use : and static values
+        'vocab_size': 151936,
+        'max_position_embeddings': 1024,
+        'n_layer': 24,
         'n_head': 14,
         'n_embd': 896,
         'dropout': 0.0,
         'bias': True,
         'learning_rate': 1e-4,
         'warmup_iters': 1000,
-        'batch_size': 6,  # From your memory test results
-        'gradient_accumulation_steps': 10,  # From your memory test results
+        'batch_size': 6,
+        'gradient_accumulation_steps': 10,
         # Qwen-specific parameters
         'intermediate_size': 4864,
         'num_key_value_heads': 2,
@@ -140,17 +138,6 @@ architecture_configs = {
         'block_size': 1024,  # For compatibility
     }
 }
-
-'''    'qwen': {
-        'vocab_size': 151936,
-        'max_position_embeddings': 32768,
-        'n_layer': 24,
-        'n_head': 14,
-        'n_embd': 896,
-        'learning_rate': 1e-4,
-        'batch_size': 16,  # Adjust based on memory
-        'dropout': 0.0,
-    }'''
 
 # ===== STABILITY AND MONITORING =====
 max_grad_norm_threshold = 10.0
@@ -171,7 +158,3 @@ variant = 4
 
 # ===== ENVIRONMENT SETTINGS =====
 os.environ["WANDB_MODE"] = "online"
-
-# Don't print configuration summary here since values will be overridden
-# The training script will print the final configuration after all overrides
-

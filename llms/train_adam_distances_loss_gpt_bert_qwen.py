@@ -21,7 +21,7 @@ from model.distance_layers import *  # All your distance layers
 from model.model_setup import *  # Other model functions
 from model.GPT import GPT, GPTConfig  # Specific GPT imports
 from model.BERT import BERT, BertConfig  # Specific BERT imports
-from model.QWEN import Qwen2, QwenConfig, create_qwen_model
+from model.QWEN import Qwen2, QwenConfig
 
 import warnings
 from typing import Union, Iterable, List, Dict, Tuple, Optional
@@ -277,11 +277,6 @@ if init_from == 'scratch':
         bert_config = BertConfig(**model_args)
         model = BERT(bert_config)
     elif model_type == 'qwen':
-        # Qwen can use either its native vocab or adapt to dataset vocab
-        # Option A: Use dataset vocab (requires retokenizing data)
-        #model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 151936
-
-        # Option B: Use Qwen's native vocab (recommended)
         model_args['vocab_size'] = 151936  # Always use Qwen's vocab
         qwen_config = QwenConfig(**model_args)
         model = Qwen2(qwen_config)

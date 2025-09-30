@@ -1,10 +1,11 @@
 import torch
 import sys
 import os
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from custom_config_runs.regular_config import regular_config
-from run.main_run_function import run_experiment
+from regular_config import regular_config
+from main_run_function import run_experiment
 
 if torch.cuda.is_available():
     hardware = "h100"

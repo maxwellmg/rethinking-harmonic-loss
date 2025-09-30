@@ -9,7 +9,7 @@
 #BSUB -R "rusage[mem=32GB]"
 #BSUB -q h100
 #BSUB -W 2:00
-#BSUB -u mm9628a@american.edu
+#BSUB -u <your email here>
 #BSUB -B
 #BSUB -N
 
@@ -38,7 +38,7 @@ nvidia-smi
 # =============================================================================
 
 # Test parameters - modify these as needed
-MODEL_TYPE="bert"
+MODEL_TYPE="bert" # Options: gpt, bert, or qwen
 DISTANCE_TYPE="baseline" # Test with baseline first, then try your custom distances
 
 echo "Memory test configuration:"

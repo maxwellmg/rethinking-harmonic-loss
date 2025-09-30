@@ -7,12 +7,12 @@
 - [Getting Started](#getting-started)  
   - [Prerequisites](#prerequisites)  
   - [Downloading Data & Models](#downloading-data--models)  
-    - [LLMs](#setup-llms)
-    - [Vision](#setup-vision)
+    - [Setup LLMs](#setup-llms)
+    - [Setup Vision](#setup-vision)
 - [Running Experiments](#running-experiments)  
-  - [LLMs](#run-llms)
-  - [Vision](#run-vision)
-  - [Toy Experiment](#run-circle)  
+  - [Run LLMs](#run-llms)
+  - [Run Vision](#run-vision)
+  - [Run Toy Experiment & Visualization](#run-toy-experiments--visualization)  
 - [Acknowledgements](#acknowledgements)
 - [License](#license)
 
@@ -137,7 +137,7 @@ Train a GPT/BERT/Qwen model with harmonic loss:
 2. Run:
   python vision/run_with_configs.py
 
-#### Toy Experiments & Visualization
+#### Run Toy Experiments & Visualization
 
 1. (Optional) Change inline configurations in mlp_visualization.py and toy_circle.py. There, you can adjust the dataset, optimizer, scheduler, and training hyperparams.
 

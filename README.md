@@ -1,5 +1,8 @@
 # Rethinking Harmonic Loss
 
+## New Results! Interpretability Results/GIFs
+https://exultant-column-670.notion.site/Rethinking-Harmonic-Loss-GIFs-3307f04d3b23809aa28dff69099eb53b
+
 ## Table of Contents
 
 - [Why Harmonic Loss](#why-harmonic-loss)   

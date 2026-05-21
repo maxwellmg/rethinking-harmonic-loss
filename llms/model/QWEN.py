@@ -1,4 +1,5 @@
 import math
+import inspect
 from dataclasses import dataclass
 import torch
 import torch.nn as nn
@@ -422,8 +423,261 @@ class Qwen2(nn.Module):
         return mfu
 
 
+@dataclass
+class QwenConfig1B:
+    """Configuration for Qwen2-1.5B (~1.54B parameters)"""
+    vocab_size: int = 151936
+    max_position_embeddings: int = 131072
+    n_embd: int = 1536  # hidden_size for 1.5B model
+    intermediate_size: int = 8960  # MLP intermediate size
+    n_layer: int = 28
+    n_head: int = 12
+    num_key_value_heads: int = 2  # For grouped query attention
+    rms_norm_eps: float = 1e-6
+    rope_theta: float = 1000000.0
+    dropout: float = 0.0
+    bias: bool = True
+    distance: str = "baseline"
+
+    # For compatibility with existing code
+    block_size: int = 1024  # Practical training context length
+    scale_attn_by_inverse_layer_idx: bool = False
+
+
+class Qwen2_1B(nn.Module):
+    """Qwen2-1.5B model with custom distance layers (~1.54B parameters).
+
+    Architecture identical to Qwen2 but scaled to 1.5B via QwenConfig1B:
+      - hidden_size:        1536  (vs 896 for 0.5B)
+      - num_hidden_layers:  28    (vs 24 for 0.5B)
+      - num_attention_heads: 12   (vs 14 for 0.5B)
+      - intermediate_size:  8960  (vs 4864 for 0.5B)
+    """
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.vocab_size = config.vocab_size
+
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.n_embd)
+        self.layers = nn.ModuleList([QwenDecoderLayer(config, layer_idx) for layer_idx in range(config.n_layer)])
+        self.norm = RMSNorm(config.n_embd, eps=config.rms_norm_eps)
+
+        # Output head — same distance layer options as the 0.5B model
+        if config.distance == "baseline":
+            self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        elif config.distance == "euclidean":
+            self.lm_head = EuclideanDistLayer(config.n_embd, config.vocab_size, bias=False)
+        elif config.distance == "manhattan_long":
+            self.lm_head = ManhattanDistLayerLong(config.n_embd, config.vocab_size, bias=False)
+        elif config.distance == "manhattan_intermediate":
+            self.lm_head = ManhattanDistLayerIntermediate(config.n_embd, config.vocab_size, bias=False)
+        elif config.distance == "manhattan_fast":
+            self.lm_head = ManhattanDistLayerFast(config.n_embd, config.vocab_size, bias=False)
+        elif config.distance == "cosine":
+            self.lm_head = CosineDistLayer(config.n_embd, config.vocab_size, bias=False)
+        elif config.distance == "cosine_simple":
+            self.lm_head = CosineSimpleDistLayer(config.n_embd, config.vocab_size, bias=False)
+        elif config.distance == "cosine_temp_scale_0_1":
+            self.lm_head = CosineTempScaleDistLayer(config.n_embd, config.vocab_size, temperature=0.1, bias=False)
+        elif config.distance == "cosine_temp_scale_0_3":
+            self.lm_head = CosineTempScaleDistLayer(config.n_embd, config.vocab_size, temperature=0.3, bias=False)
+        elif config.distance == "cosine_temp_scale_0_5":
+            self.lm_head = CosineTempScaleDistLayer(config.n_embd, config.vocab_size, temperature=0.5, bias=False)
+        elif config.distance == "cosine_temp_scale_1_0":
+            self.lm_head = CosineTempScaleDistLayer(config.n_embd, config.vocab_size, temperature=1.0, bias=False)
+        elif config.distance == "cosine_temp_scale_2_0":
+            self.lm_head = CosineTempScaleDistLayer(config.n_embd, config.vocab_size, temperature=2.0, bias=False)
+        elif config.distance == "minkowski_l1":
+            self.lm_head = create_optimized_minkowski_layer(config.n_embd, config.vocab_size, temperature=1.0)
+        elif config.distance == "minkowski_l2":
+            self.lm_head = create_optimized_minkowski_layer(config.n_embd, config.vocab_size, temperature=2.0)
+        elif config.distance == "minkowski_l1_5":
+            self.lm_head = create_optimized_minkowski_layer(config.n_embd, config.vocab_size, temperature=1.5)
+        elif config.distance == "minkowski_l3":
+            self.lm_head = create_optimized_minkowski_layer(config.n_embd, config.vocab_size, temperature=3.0)
+        elif config.distance == "minkowski_l0_5":
+            self.lm_head = create_optimized_minkowski_layer(config.n_embd, config.vocab_size, temperature=0.5)
+        elif config.distance == "mahalanobis_diagonal":
+            self.lm_head = MahalanobisDistLayerDiagonal(config.n_embd, config.vocab_size, bias=False)
+        elif config.distance == "mahalanobis_cholesky":
+            self.lm_head = MahalanobisDistLayerCholesky(config.n_embd, config.vocab_size, bias=False)
+        elif config.distance == "mahalanobis_standard":
+            self.lm_head = MahalanobisDistLayerStandard(config.n_embd, config.vocab_size, bias=False)
+        elif config.distance == "hamming_soft":
+            self.lm_head = create_hamming_layer(config.n_embd, config.vocab_size, variant="soft", bias=False)
+        elif config.distance == "hamming_gumbel":
+            self.lm_head = create_hamming_layer(config.n_embd, config.vocab_size, variant="gumbel", bias=False)
+        elif config.distance == "hamming_hard":
+            self.lm_head = create_hamming_layer(config.n_embd, config.vocab_size, variant="hard", bias=False)
+        elif config.distance == "chebyshev":
+            self.lm_head = create_chebyshev_layer(config.n_embd, config.vocab_size, smooth=False, bias=False)
+        elif config.distance == "chebyshev_smooth":
+            self.lm_head = create_chebyshev_layer(config.n_embd, config.vocab_size, smooth=True, bias=False)
+        elif config.distance == "canberra_standard":
+            self.lm_head = create_canberra_layer(config.n_embd, config.vocab_size, variant="standard", bias=False)
+        elif config.distance == "canberra_robust":
+            self.lm_head = create_canberra_layer(config.n_embd, config.vocab_size, variant="robust", bias=False)
+        elif config.distance == "canberra_weighted":
+            self.lm_head = create_canberra_layer(config.n_embd, config.vocab_size, variant="weighted", bias=False)
+        elif config.distance == "bray_curtis_standard":
+            self.lm_head = create_bray_curtis_layer(config.n_embd, config.vocab_size, variant="standard", bias=False)
+        elif config.distance == "bray_curtis_abs":
+            self.lm_head = create_bray_curtis_layer(config.n_embd, config.vocab_size, variant="abs", bias=False)
+        elif config.distance == "bray_curtis_normalized":
+            self.lm_head = create_bray_curtis_layer(config.n_embd, config.vocab_size, variant="normalized", bias=False)
+        else:
+            raise ValueError(f"Unknown distance type: {config.distance}")
+
+        # Weight tying
+        self.embed_tokens.weight = self.lm_head.weight
+
+        # Initialize weights
+        self.apply(self._init_weights)
+
+        print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
+
+    def get_num_params(self, non_embedding=True):
+        n_params = sum(p.numel() for p in self.parameters())
+        if non_embedding:
+            n_params -= self.embed_tokens.weight.numel()
+        return n_params
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        elif isinstance(module, RMSNorm):
+            torch.nn.init.ones_(module.weight)
+
+    def _get_causal_mask(self, seq_len, device):
+        mask = torch.full((seq_len, seq_len), float('-inf'), device=device)
+        mask = torch.triu(mask, diagonal=1)
+        return mask[None, None, :, :]
+
+    def forward(self, input_ids, attention_mask=None, targets=None):
+        batch_size, seq_len = input_ids.shape
+        device = input_ids.device
+
+        hidden_states = self.embed_tokens(input_ids)
+
+        causal_mask = self._get_causal_mask(seq_len, device)
+        if attention_mask is not None:
+            attention_mask = attention_mask[:, None, None, :]
+            attention_mask = attention_mask.expand(batch_size, 1, seq_len, seq_len)
+            causal_mask = causal_mask + attention_mask
+
+        for layer in self.layers:
+            hidden_states = layer(hidden_states, attention_mask=causal_mask)
+
+        hidden_states = self.norm(hidden_states)
+
+        if targets is not None:
+            if self.config.distance == "baseline":
+                logits = self.lm_head(hidden_states)
+                logits = torch.clamp(logits, -30, 30)
+            else:
+                dist_output = self.lm_head(hidden_states)
+                dist_output = torch.clamp(dist_output, 1e-8, 1e8)
+                sum_dist = torch.sum(dist_output, dim=-1, keepdim=True)
+                sum_dist = torch.clamp(sum_dist, min=1e-8)
+                prob = dist_output / sum_dist
+                alpha = 0.01
+                prob = prob + alpha / self.config.vocab_size
+                prob = torch.clamp(prob, 1e-8, 1.0)
+                logits = torch.log(prob)
+
+            logits = logits.reshape(-1, logits.size(-1))
+            targets = targets.reshape(-1)
+            loss = F.cross_entropy(logits, targets, ignore_index=-1,
+                                   reduction='none', label_smoothing=0.1)
+            loss = torch.clamp(loss, 0, 20)
+            loss = torch.mean(loss)
+            acc = torch.mean((torch.argmax(logits, dim=1) == targets).float())
+        else:
+            if self.config.distance == "baseline":
+                logits = self.lm_head(hidden_states[:, [-1], :])
+                logits = torch.clamp(logits, -30, 30)
+            else:
+                dist_output = self.lm_head(hidden_states[:, [-1], :])
+                dist_output = torch.clamp(dist_output, 1e-8, 1e8)
+                sum_dist = torch.sum(dist_output, dim=-1, keepdim=True)
+                sum_dist = torch.clamp(sum_dist, min=1e-8)
+                prob = dist_output / sum_dist
+                alpha = 0.01
+                prob = prob + alpha / self.config.vocab_size
+                prob = torch.clamp(prob, 1e-8, 1.0)
+                logits = torch.log(prob)
+            loss = None
+            acc = None
+
+        return logits, loss, acc
+
+    def configure_optimizers(self, optimizer_name, weight_decay, learning_rate, betas, rho, gamma, lr_max, device_type):
+        decay = set()
+        no_decay = set()
+        whitelist_weight_modules = (torch.nn.Linear, EuclideanDistLayer, ManhattanDistLayerLong,
+                                    ManhattanDistLayerIntermediate, ManhattanDistLayerFast,
+                                    CosineDistLayer, CosineSimpleDistLayer, CosineTempScaleDistLayer,
+                                    OptimizedMinkowskiDistLayer, UltraFastMinkowskiL1,
+                                    MahalanobisDistLayerStandard, MahalanobisDistLayerDiagonal,
+                                    MahalanobisDistLayerCholesky, HammingDistLayer,
+                                    ChebyshevDistLayer, CanberraDistLayer, BrayCurtisDistLayer)
+        blacklist_weight_modules = (RMSNorm, torch.nn.Embedding)
+
+        for mn, m in self.named_modules():
+            for pn, p in m.named_parameters():
+                fpn = '%s.%s' % (mn, pn) if mn else pn
+                if pn.endswith('bias'):
+                    no_decay.add(fpn)
+                elif pn.endswith('weight') and isinstance(m, whitelist_weight_modules):
+                    decay.add(fpn)
+                elif pn.endswith('weight') and isinstance(m, blacklist_weight_modules):
+                    no_decay.add(fpn)
+
+        if 'lm_head.weight' in decay:
+            decay.remove('lm_head.weight')
+
+        param_dict = {pn: p for pn, p in self.named_parameters()}
+        optim_groups = [
+            {"params": [param_dict[pn] for pn in sorted(list(decay))], "weight_decay": weight_decay},
+            {"params": [param_dict[pn] for pn in sorted(list(no_decay))], "weight_decay": 0.0},
+        ]
+
+        opt_func = optimizer_dict[optimizer_name]
+        if optimizer_name == 'adamw':
+            use_fused = False
+            print(f"using fused AdamW: {use_fused}")
+            extra_args = dict(fused=True) if use_fused else dict()
+            optimizer = opt_func(optim_groups, lr=learning_rate, betas=betas, **extra_args)
+        else:
+            raise ValueError('Invalid optimizer.')
+        return optimizer
+
+    def estimate_mfu(self, fwdbwd_per_iter, dt):
+        N = self.get_num_params()
+        cfg = self.config
+        L, H, Q, T = cfg.n_layer, cfg.n_head, cfg.n_embd // cfg.n_head, cfg.block_size
+        flops_per_token = 6 * N + 12 * L * H * Q * T
+        flops_per_fwdbwd = flops_per_token * T
+        flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
+        flops_achieved = flops_per_iter * (1.0 / dt)
+        flops_promised = 125e12  # V100 baseline
+        mfu = flops_achieved / flops_promised
+        return mfu
+
+
 # Factory function for creating Qwen models
 def create_qwen_model(distance_type="baseline", **kwargs):
     """Factory function to create Qwen2 with custom distance layers"""
     config = QwenConfig(distance=distance_type, **kwargs)
     return Qwen2(config)
+
+
+def create_qwen_1b_model(distance_type="baseline", **kwargs):
+    """Factory function to create Qwen2-1.5B with custom distance layers"""
+    config = QwenConfig1B(distance=distance_type, **kwargs)
+    return Qwen2_1B(config)

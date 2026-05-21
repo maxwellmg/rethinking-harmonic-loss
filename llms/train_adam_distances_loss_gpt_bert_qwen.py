@@ -11,25 +11,32 @@ from torch.distributed import init_process_group, destroy_process_group
 from codecarbon import EmissionsTracker
 from config.config import *
 from utils.gradient_check import check_gradients
+import importlib
 import sys
 import pandas as pd
 from datetime import datetime
 import random
+import glob
+import re
+
 
 from model.distance_layers import *  # All your distance layers
 from model.model_setup import *  # Other model functions
 from model.GPT import GPT, GPTConfig  # Specific GPT imports
 from model.BERT import BERT, BertConfig  # Specific BERT imports
-from model.QWEN import Qwen2, QwenConfig
+from model.QWEN import Qwen2, QwenConfig, create_qwen_model, Qwen2_1B, QwenConfig1B, create_qwen_1b_model
 
+import warnings
 from typing import Union, Iterable, List, Dict, Tuple, Optional
 
+import torch
+from torch import Tensor, inf
 
 hostname = socket.gethostname()
 
 # Current Run Configuration
-wandb_project = 'qwen_full_runs'
-#wandb_project = 'bert_full_runs'
+wandb_project = '2B_parameter_test'
+#wandb_project = 'qwen_full_runs'
 #wandb_project = 'gpt_bert_testing'
 
 import argparse
@@ -37,8 +44,8 @@ import argparse
 # Enhanced parser for model architecture selection - ADD QWEN
 parser = argparse.ArgumentParser()
 parser.add_argument('--distance', type=str, default='baseline')
-parser.add_argument('--model_type', type=str, default='gpt', choices=['gpt', 'bert', 'qwen'], 
-                   help='Choose between GPT, BERT, or Qwen architecture')
+parser.add_argument('--model_type', type=str, default='gpt', choices=['gpt', 'bert', 'qwen', 'qwen_1b'],
+                   help='Choose between GPT, BERT, Qwen-0.5B, or Qwen-1.5B architecture')
 parser.add_argument('--batch_size', type=int)
 parser.add_argument('--gradient_accumulation_steps', type=int) 
 parser.add_argument('--max_iters', type=int)
@@ -56,7 +63,7 @@ exec(open('utils/configurator.py').read())
 print(f"Using model_type='{model_type}' with distance='{distance}'")
 
 wandb_run_name = f'{model_type}_{distance}_run'
-init_from = 'scratch'
+init_from = 'resume'  #resume #'scratch'
 
 run_out_dir = os.path.join(out_dir, wandb_run_name)
 os.makedirs(run_out_dir, exist_ok=True)
@@ -66,21 +73,28 @@ config_keys = [k for k,v in globals().items() if not k.startswith('_') and isins
 config = {k: globals()[k] for k in config_keys}
 config['model_type'] = model_type
 
-# Import architecture configs from config file
-exec("from config.config import architecture_configs")
+# Import architecture and dataset configs from config file
+exec("from config.config import architecture_configs, dataset_configs")
 
 # Apply architecture-specific overrides
 if model_type in architecture_configs:
     arch_config = architecture_configs[model_type]
-    
+
     for key, value in arch_config.items():
         if key == 'default_vocab_size':
             pass
         else:
             globals()[key] = value
             config[key] = value
-    
+
     print(f"Applied {model_type.upper()} specific configuration overrides")
+
+# Apply dataset-specific overrides (after architecture so both can be set independently)
+if dataset in dataset_configs:
+    for key, value in dataset_configs[dataset].items():
+        globals()[key] = value
+        config[key] = value
+    print(f"Applied {dataset} specific configuration overrides")
 
 # DDP and device setup
 ddp = int(os.environ.get('RANK', -1)) != -1
@@ -216,7 +230,7 @@ def get_batch_unified(split, model_type):
         return get_batch_gpt(split)
     elif model_type == 'bert':
         return get_batch_bert(split)
-    elif model_type == 'qwen':
+    elif model_type in ('qwen', 'qwen_1b'):
         return get_batch_qwen(split)
     else:
         raise ValueError("Invalid model type")
@@ -251,12 +265,22 @@ elif model_type == 'bert':
                       type_vocab_size=2,
                       pad_token_id=0)
 elif model_type == 'qwen':
-    model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, 
+    model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd,
                       max_position_embeddings=block_size,
                       bias=bias, vocab_size=None, dropout=dropout,
                       distance=distance,
                       # Qwen-specific parameters
                       intermediate_size=getattr(config, 'intermediate_size', 4864),
+                      num_key_value_heads=getattr(config, 'num_key_value_heads', 2),
+                      rms_norm_eps=getattr(config, 'rms_norm_eps', 1e-6),
+                      rope_theta=getattr(config, 'rope_theta', 1000000.0))
+elif model_type == 'qwen_1b':
+    model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd,
+                      max_position_embeddings=block_size,
+                      bias=bias, vocab_size=None, dropout=dropout,
+                      distance=distance,
+                      # Qwen-1.5B-specific parameters
+                      intermediate_size=getattr(config, 'intermediate_size', 8960),
                       num_key_value_heads=getattr(config, 'num_key_value_heads', 2),
                       rms_norm_eps=getattr(config, 'rms_norm_eps', 1e-6),
                       rope_theta=getattr(config, 'rope_theta', 1000000.0))
@@ -273,9 +297,13 @@ if init_from == 'scratch':
         bert_config = BertConfig(**model_args)
         model = BERT(bert_config)
     elif model_type == 'qwen':
-        model_args['vocab_size'] = 151936  # Always use Qwen's vocab
+        model_args['vocab_size'] = 151936  # Always use Qwen's native vocab
         qwen_config = QwenConfig(**model_args)
         model = Qwen2(qwen_config)
+    elif model_type == 'qwen_1b':
+        model_args['vocab_size'] = 151936  # Always use Qwen's native vocab
+        qwen_config = QwenConfig1B(**model_args)
+        model = Qwen2_1B(qwen_config)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
         
@@ -283,7 +311,19 @@ if init_from == 'scratch':
 
 elif init_from == 'resume':
     print(f"Resuming {model_type.upper()} training from {run_out_dir}")
-    ckpt_path = os.path.join(out_dir, config['wandb_run_name'], 'ckpt.pt')
+    ckpt_files = glob.glob(os.path.join(run_out_dir, f'ckpt_*_{model_type}_{distance}.pt'))
+    if not ckpt_files:
+        raise FileNotFoundError(f"No checkpoints found in {run_out_dir}")
+    # Extract iteration numbers and find max
+    #ckpt_path = max(ckpt_files, key=lambda x: int(x.split('_')[-3]))
+    # This will also fail on non-matching files, so filter first:
+    if ckpt_files:
+    # Extract the number that comes after 'ckpt_' and before the next '_'
+        ckpt_path = max(ckpt_files, key=lambda x: int(re.search(r'ckpt_(\d+)_', x).group(1)))
+    else:
+        raise ValueError(f"No checkpoint files found matching pattern: ckpt_*_{model_type}_{distance}.pt")
+
+
     checkpoint = torch.load(ckpt_path, map_location=device)
     checkpoint_model_args = checkpoint['model_args']
     
@@ -300,12 +340,18 @@ elif init_from == 'resume':
         model = BERT(bert_config)
     elif model_type == 'qwen':
         model_args['max_position_embeddings'] = checkpoint_model_args.get('max_position_embeddings', 32768)
-        # Add other Qwen-specific args from checkpoint
         for k in ['intermediate_size', 'num_key_value_heads', 'rms_norm_eps', 'rope_theta']:
             if k in checkpoint_model_args:
                 model_args[k] = checkpoint_model_args[k]
         qwen_config = QwenConfig(**model_args)
         model = Qwen2(qwen_config)
+    elif model_type == 'qwen_1b':
+        model_args['max_position_embeddings'] = checkpoint_model_args.get('max_position_embeddings', 131072)
+        for k in ['intermediate_size', 'num_key_value_heads', 'rms_norm_eps', 'rope_theta']:
+            if k in checkpoint_model_args:
+                model_args[k] = checkpoint_model_args[k]
+        qwen_config = QwenConfig1B(**model_args)
+        model = Qwen2_1B(qwen_config)
     
     state_dict = checkpoint['model']
     
@@ -337,12 +383,16 @@ elif init_from.startswith('bert') and model_type == 'bert':
 
 elif init_from.startswith('qwen') and model_type == 'qwen':
     print(f"Initializing Qwen from pretrained weights: {init_from}")
-    # Note: This would require implementing from_pretrained for Qwen
-    # For now, we'll fall back to scratch initialization
     print("Note: Qwen from_pretrained not implemented, using scratch initialization")
-    model_args['vocab_size'] = 151936  # Qwen's native vocab
+    model_args['vocab_size'] = 151936
     qwen_config = QwenConfig(**model_args)
     model = Qwen2(qwen_config)
+elif init_from.startswith('qwen') and model_type == 'qwen_1b':
+    print(f"Initializing Qwen-1.5B from pretrained weights: {init_from}")
+    print("Note: Qwen from_pretrained not implemented, using scratch initialization")
+    model_args['vocab_size'] = 151936
+    qwen_config = QwenConfig1B(**model_args)
+    model = Qwen2_1B(qwen_config)
 
 else:
     raise ValueError(f"Cannot initialize {model_type} model with init_from='{init_from}'")
@@ -353,7 +403,7 @@ if model_type == 'gpt' and block_size < model.config.block_size:
     model_args['block_size'] = block_size
 elif model_type == 'bert' and block_size < model.config.max_position_embeddings:
     print(f"Warning: Requested block_size {block_size} < model max_position_embeddings {model.config.max_position_embeddings}")
-elif model_type == 'qwen' and block_size < model.config.max_position_embeddings:
+elif model_type in ('qwen', 'qwen_1b') and block_size < model.config.max_position_embeddings:
     print(f"Warning: Requested block_size {block_size} < model max_position_embeddings {model.config.max_position_embeddings}")
 
 model.to(device)
@@ -379,7 +429,7 @@ if ddp:
     model = DDP(model, device_ids=[ddp_local_rank])
 
 # Updated loss estimation function
-@torch.no_grad()
+'''@torch.no_grad()
 def estimate_loss():
     out = {}
     model.eval()
@@ -401,6 +451,49 @@ def estimate_loss():
             losses[k] = loss.item()
         out[split] = losses.mean()
     model.train()
+    return out'''
+
+@torch.no_grad()
+def estimate_loss():
+    """Evaluate model on train and val sets, return loss and perplexity"""
+    out = {}
+    model.eval()
+    
+    for split in ['train', 'val']:
+        losses = torch.zeros(eval_iters)
+        accuracies = torch.zeros(eval_iters) if model_type != 'bert' else None
+
+        for k in range(eval_iters):
+            if model_type == 'gpt' or model_type in ('qwen', 'qwen_1b'):
+                X, Y = get_batch(split)
+                with ctx:
+                    if model_type in ('qwen', 'qwen_1b'):
+                        logits, loss, acc = model(input_ids=X, targets=Y)
+                    else:  # GPT
+                        logits, loss, acc = model(X, Y)
+                if accuracies is not None:
+                    accuracies[k] = acc.item()
+            else:  # BERT with MLM
+                input_ids, attention_mask, labels = get_batch(split)
+                with ctx:
+                    logits, loss, acc = model(input_ids, attention_mask=attention_mask, labels=labels)
+            
+            losses[k] = loss.item()
+        
+        # Calculate average loss
+        avg_loss = losses.mean()
+        
+        # Calculate perplexity from average loss
+        perplexity = calculate_perplexity(avg_loss)
+        
+        # Store both loss and perplexity
+        out[split] = {
+            'loss': avg_loss.item(),
+            'perplexity': perplexity,
+            'accuracy': accuracies.mean().item() if accuracies is not None else None
+        }
+    
+    model.train()
     return out
 
 # Learning rate scheduler
@@ -418,6 +511,27 @@ def get_lr(it):
 def fillnan(x, nan_value=0.):
     """Replace NaN/Inf values with specified value (default: 0)"""
     return torch.nan_to_num(x, nan=nan_value, posinf=nan_value, neginf=nan_value)
+
+def calculate_perplexity(loss):
+    """
+    Calculate perplexity from cross-entropy loss.
+    Perplexity = exp(loss)
+    
+    Args:
+        loss: Cross-entropy loss value (can be tensor or float)
+    
+    Returns:
+        Perplexity value as a float
+    """
+    if isinstance(loss, torch.Tensor):
+        # Clamp loss to prevent overflow in exp
+        # Max loss of 20 gives perplexity of ~485 million
+        loss_clamped = torch.clamp(loss, max=20.0)
+        return torch.exp(loss_clamped).item()
+    else:
+        # Already a float
+        loss_clamped = min(loss, 20.0)
+        return math.exp(loss_clamped)
 
 # Function to save accumulated emissions data
 def save_accumulated_emissions():
@@ -442,7 +556,7 @@ if master_process and tracker:
 
 # Get initial batch based on model type - UPDATED FOR QWEN
 print(f"Starting {model_type.upper()} training...")
-if model_type == 'gpt' or model_type == 'qwen':
+if model_type == 'gpt' or model_type in ('qwen', 'qwen_1b'):
     X, Y = get_batch('train')
     print(f"{model_type.upper()} batch shapes: X={X.shape}, Y={Y.shape}")
     # Initialize BERT variables to None for consistency
@@ -493,7 +607,7 @@ try:
                     print(f"Error stopping tracker at iter {iter_num}: {e}")
             
             # Run evaluation
-            losses = estimate_loss()
+            '''losses = estimate_loss()
             print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
             
             # Store comprehensive emissions data for this interval
@@ -509,7 +623,35 @@ try:
                 'val_loss': losses['val'].item(),
                 'learning_rate': lr,
                 'best_val_loss': best_val_loss,
-            }
+            }'''
+            eval_results = estimate_loss()
+            # Extract results
+            train_loss = eval_results['train']['loss']
+            val_loss = eval_results['val']['loss']
+            train_ppl = eval_results['train']['perplexity']
+            val_ppl = eval_results['val']['perplexity']
+            
+            # Print results
+            print(f"\nstep {iter_num}:")
+            print(f"  train loss: {train_loss:.4f}, perplexity: {train_ppl:.2f}")
+            print(f"  val loss:   {val_loss:.4f}, perplexity: {val_ppl:.2f}")
+            
+            # Store for emissions record
+            emissions_record = {
+                'timestamp': datetime.now().isoformat(),
+                'iteration': iter_num,
+                'model_type': model_type,
+                'distance_type': distance,
+                'wandb_run_name': wandb_run_name,
+                'interval_emissions_kg_co2': interval_emissions,
+                'cumulative_emissions_kg_co2': cumulative_emissions,
+                'train_loss': train_loss,
+                'val_loss': val_loss,
+                'train_perplexity': train_ppl,  # NEW
+                'val_perplexity': val_ppl,      # NEW
+                'learning_rate': lr,
+                'best_val_loss': best_val_loss,
+            }    
             
             # Add comprehensive CodeCarbon data if available
             if interval_emissions_data and not isinstance(interval_emissions_data, (int, float)):
@@ -585,7 +727,7 @@ try:
             emissions_data_list.append(emissions_record)
             
             # Log to wandb
-            if wandb_log:
+            '''if wandb_log:
                 log_data = {
                     "iter": iter_num,
                     "train/loss": losses['train'],
@@ -596,11 +738,35 @@ try:
                     "cumulative_emissions_kg_co2": cumulative_emissions,
                     "model_type": model_type,
                 }
+                wandb.log(log_data, step=iter_num)'''
+
+            if wandb_log:
+                log_data = {
+                    "iter": iter_num,
+                    "train/loss": train_loss,
+                    "val/loss": val_loss,
+                    "train/perplexity": train_ppl,  # NEW
+                    "val/perplexity": val_ppl,      # NEW
+                    "lr": lr,
+                    "interval/emissions_kg_co2": interval_emissions,
+                    "cumulative/emissions_kg_co2": cumulative_emissions,
+                }
+            
+                
+                # Add accuracy if available
+                if eval_results['train']['accuracy'] is not None:
+                    log_data["train/accuracy"] = eval_results['train']['accuracy']
+                if eval_results['val']['accuracy'] is not None:
+                    log_data["val/accuracy"] = eval_results['val']['accuracy']
+                
                 wandb.log(log_data, step=iter_num)
                 
             # Save checkpoint
-            if losses['val'] < best_val_loss or always_save_checkpoint:
-                best_val_loss = losses['val']
+            #if losses['val'] < best_val_loss or always_save_checkpoint:
+                #best_val_loss = losses['val']
+
+            if val_loss < best_val_loss or always_save_checkpoint:
+                best_val_loss = val_loss
                 if iter_num > 0:
                     checkpoint = {
                         'model': raw_model.state_dict(),
@@ -646,9 +812,8 @@ try:
             
             with ctx:
                 if model_type == 'gpt':
-                    # GPT and Qwen: Causal language modeling
                     logits, loss, acc = model(X, Y)
-                elif model_type == 'qwen':
+                elif model_type in ('qwen', 'qwen_1b'):
                     logits, loss, acc = model(input_ids=X, targets=Y)
                 else:  # BERT
                     # BERT: Masked language modeling
@@ -659,8 +824,8 @@ try:
                     
                 loss = loss / gradient_accumulation_steps
                 
-            # Prefetch next batch - UPDATED FOR QWEN
-            if model_type == 'gpt' or model_type == 'qwen':
+            # Prefetch next batch
+            if model_type == 'gpt' or model_type in ('qwen', 'qwen_1b'):
                 X, Y = get_batch('train')
             else:  # BERT
                 input_ids, attention_mask, labels = get_batch('train')
@@ -691,7 +856,7 @@ try:
         dt = t1 - t0
         t0 = t1
         
-        if iter_num % log_interval == 0 and master_process:
+        '''if iter_num % log_interval == 0 and master_process:
             lossf = loss.item() * gradient_accumulation_steps
             accf = acc.item() if acc is not None else 0.0
             
@@ -699,7 +864,20 @@ try:
                 mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
                 running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
                 
-            print(f"iter {iter_num}: loss {lossf:.4f}, acc {accf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+            print(f"iter {iter_num}: loss {lossf:.4f}, acc {accf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")'''
+        if iter_num % log_interval == 0 and master_process:
+            lossf = loss.item() * gradient_accumulation_steps
+            accf = acc.item() if acc is not None else 0.0
+            
+            # Calculate perplexity for current step
+            train_ppl = calculate_perplexity(lossf)  # NEW
+            
+            if local_iter_num >= 5:
+                mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
+                running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
+        
+            # Updated print statement
+            print(f"iter {iter_num}: loss {lossf:.4f}, ppl {train_ppl:.2f}, acc {accf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
             
             # Calculate norms for logging
             params = list(model.parameters())
@@ -723,10 +901,25 @@ try:
             v_norm = torch.sqrt(v_norm).item()
             move_norm = torch.sqrt(move_norm).item()
             
+            '''if wandb_log:
+                wandb.log({
+                    "iter": iter_num,
+                    "train/loss": lossf,
+                    "train/acc": accf,
+                    "lr": lr,
+                    "param_norm": total_param_norm.item(),
+                    "momentum_norm": momentum_norm,
+                    "v_norm": v_norm,
+                    "move_norm": move_norm,
+                    "train/clip_rate": clip_time / (iter_num + 1),
+                    "model_type": model_type
+                }, step=iter_num)'''
+                
             if wandb_log:
                 wandb.log({
                     "iter": iter_num,
                     "train/loss": lossf,
+                    "train/perplexity": train_ppl,  # NEW
                     "train/acc": accf,
                     "lr": lr,
                     "param_norm": total_param_norm.item(),

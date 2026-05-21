@@ -2,6 +2,7 @@ import os
 
 # ===== WANDB AND PROJECT SETTINGS =====
 wandb_log = True
+wandb_project = '2B_parameter_test'
 # Project and run names now set by command line args in training script
 # wandb_project will be overridden by --wandb_project if provided
 # wandb_run_name will be auto-generated as {model_type}_{distance}_run
@@ -10,7 +11,7 @@ wandb_log = True
 out_dir = 'out'
 eval_only = False
 always_save_checkpoint = True
-init_from = 'scratch'
+init_from = 'resume'  # 'scratch', 'resume', 'gpt2*', or 'bert*'
 
 # ===== DATA SETTINGS =====
 dataset = 'openwebtext'
@@ -18,37 +19,55 @@ block_size = 512  # Reduced for BERT compatibility (BERT-base max is 512)
 
 # ===== MODEL ARCHITECTURE =====
 # Model types
-model_type = 'qwen'  # 'gpt', 'bert', or 'qwen'
+model_type = 'gpt'  # 'gpt', 'bert', or 'qwen'
 
-# BERT-base and GPT-2 small have similar parameters for fair comparison
-n_layer = 12
-n_head = 12  
-n_embd = 768
+# Previous for original runs presubmission. BERT-base and GPT-2 small have similar parameters for fair comparison
+#n_layer = 12
+#n_head = 12  
+#n_embd = 768
+#dropout = 0.1
+#bias = True
+#scale_attn_by_inverse_layer_idx = False
+
+# New values for 1.5B parameter model
+n_layer = 48        # Increased from 12
+n_head = 20         # Increased from 12 (must divide n_embd evenly)
+n_embd = 1600       # Increased from 768 (1600/20 = 80 per head)
 dropout = 0.1
 bias = True
 scale_attn_by_inverse_layer_idx = False
 
-'''# ===== BATCH SIZE AND GRADIENT ACCUMULATION (FOR GPT)=====
+'''# ===== BATCH SIZE AND GRADIENT ACCUMULATION (FOR original GPT)=====
 batch_size = 16        
 gradient_accumulation_steps = 8  # Effective batch size = 128
 
 # ===== LEARNING RATE AND OPTIMIZATION =====
-learning_rate = 2e-4 
+# Different learning rates often work better for different architectures
+learning_rate = 2e-4   # Good middle ground for both GPT and BERT
 min_lr = 2e-6
 warmup_iters = 500'''
 
 '''# ===== BATCH SIZE AND GRADIENT ACCUMULATION (FOR BERT) =====
-batch_size = 38  
-gradient_accumulation_steps = 2 '''
+batch_size = 38        # Safe batch size from your test results
+gradient_accumulation_steps = 2  # For effective batch size of 76
 
 # ===== BATCH SIZE AND GRADIENT ACCUMULATION (FOR QWEN) =====
 batch_size = 6        # Safe batch size from your test results
-gradient_accumulation_steps = 10  # For effective batch size of 60
+gradient_accumulation_steps = 10  # For effective batch size of 60'''
+
+# ===== BATCH SIZE AND GRADIENT ACCUMULATION =====
+# You'll need to adjust these based on your GPU memory
+# With 2B model, you'll need very small batch_size
+
+batch_size = 3
+gradient_accumulation_steps = 21  # Effective batch of 63
+learning_rate = 1e-4  # Lower for 2B model
+#warmup_iters = 2000
 
 # ===== LEARNING RATE AND OPTIMIZATION =====
-learning_rate = 1e-4   # BERT typically needs lower LR than GPT
+#learning_rate = 1e-4   # BERT typically needs lower LR than GPT
 min_lr = 1e-6
-warmup_iters = 1000    # BERT benefits from longer warmup
+#warmup_iters = 1000    # BERT benefits from longer warmup
 
 # Learning rate decay
 decay_lr = True
@@ -67,17 +86,28 @@ lr_max = learning_rate
 # ===== GRADIENT CLIPPING =====
 grad_clip = 1.0  # Standard value for both architectures
 
-# ===== TRAINING ITERATIONS =====
+# Settings for presubmission runs
+'''# ===== TRAINING ITERATIONS =====
 max_iters = 10000
 eval_interval = 1000   # More frequent evaluation to catch issues early
 eval_iters = 100     # Reduced for faster evaluation
-log_interval = 50    # More frequent logging for debugging
+log_interval = 50    # More frequent logging for debugging'''
+
+# Very Large GPT model params
+# ===== TRAINING ITERATIONS =====
+max_iters = 10000
+eval_interval = 500
+eval_iters = 25
+log_interval = 25
 
 #Testing figures
-#max_iters = 20
+#max_iters = 60
 #eval_interval = 10   # More frequent evaluation to catch issues early
 #eval_iters = 10     # Reduced for faster evaluation
 #log_interval = 5    # More frequent logging for debugging
+
+# ===== PERPLEXITY TRACKING =====
+track_perplexity = True
 
 # ===== SYSTEM AND PRECISION =====
 device = 'cuda'
@@ -103,12 +133,14 @@ architecture_configs = {
     'gpt': {
         'block_size': 1024,           # GPT can handle longer sequences
         'default_vocab_size': 50304,
-        'learning_rate': 2e-4,        # GPT often works well with this LR
-        'warmup_iters': 500,
+        #'learning_rate': 2e-4,        # GPT often works well with this LR
+        'learning_rate': 1e-4,
+        'warmup_iters': 1000,
         'dropout': 0.1,
     },
     'bert': {
         'max_position_embeddings': 512,  # BERT's standard max length
+        #'default_vocab_size': 30522,
         'default_vocab_size': 50304,
         'learning_rate': 1e-4,           # BERT often needs lower LR
         'warmup_iters': 1000,            # BERT benefits from longer warmup
@@ -119,24 +151,73 @@ architecture_configs = {
         'gradient_accumulation_steps': 2,
     },
     'qwen': {
-        'vocab_size': 151936,
-        'max_position_embeddings': 1024,
-        'n_layer': 24,
+        'vocab_size': 151936,  # Fixed: use : not =
+        'max_position_embeddings': 1024,  # Fixed: use static value, not variable
+        'n_layer': 24,  # Fixed: use : and static values
         'n_head': 14,
         'n_embd': 896,
         'dropout': 0.0,
         'bias': True,
         'learning_rate': 1e-4,
         'warmup_iters': 1000,
-        'batch_size': 6,
-        'gradient_accumulation_steps': 10,
+        'batch_size': 6,  # From your memory test results
+        'gradient_accumulation_steps': 10,  # From your memory test results
         # Qwen-specific parameters
         'intermediate_size': 4864,
         'num_key_value_heads': 2,
         'rms_norm_eps': 1e-6,
         'rope_theta': 1000000.0,
         'block_size': 1024,  # For compatibility
+    },
+    # Qwen2-1.5B (~1.54B parameters)
+    'qwen_1b': {
+        'vocab_size': 151936,
+        'max_position_embeddings': 1024,
+        'n_layer': 28,
+        'n_head': 12,
+        'n_embd': 1536,
+        'dropout': 0.0,
+        'bias': True,
+        'learning_rate': 1e-4,
+        'warmup_iters': 1000,
+        'batch_size': 2,   # Smaller batch due to ~3x larger model vs 0.5B
+        'gradient_accumulation_steps': 32,  # Effective batch size of 64
+        # Qwen-specific parameters
+        'intermediate_size': 8960,
+        'num_key_value_heads': 2,
+        'rms_norm_eps': 1e-6,
+        'rope_theta': 1000000.0,
+        'block_size': 1024,
     }
+}
+
+'''    'qwen': {
+        'vocab_size': 151936,
+        'max_position_embeddings': 32768,
+        'n_layer': 24,
+        'n_head': 14,
+        'n_embd': 896,
+        'learning_rate': 1e-4,
+        'batch_size': 16,  # Adjust based on memory
+        'dropout': 0.0,
+    }'''
+
+# ===== DATASET-SPECIFIC OVERRIDES =====
+# Applied after architecture_configs in the training script.
+# MiniPile is ~1.5 GB (~750M tokens with GPT-2) vs OpenWebText ~18 GB (~9B tokens).
+# Smaller dataset → more frequent evaluation; the training loop cycles through it
+# multiple times, which is fine for pretraining experiments.
+dataset_configs = {
+    'OpenWebText': {
+        'eval_interval': 500,
+        'eval_iters': 25,
+        'log_interval': 25,
+    },
+    'MiniPile': {
+        'eval_interval': 250,   # more frequent — dataset is ~12x smaller
+        'eval_iters': 50,       # more iters for a stable val-loss estimate
+        'log_interval': 25,
+    },
 }
 
 # ===== STABILITY AND MONITORING =====
@@ -158,3 +239,20 @@ variant = 4
 
 # ===== ENVIRONMENT SETTINGS =====
 os.environ["WANDB_MODE"] = "online"
+
+# Don't print configuration summary here since values will be overridden
+# The training script will print the final configuration after all overrides
+
+print("SCALED MODEL CONFIGURATION")
+print(f"Model Type: {model_type}")
+print(f"Model Size: ~2B parameters")
+print(f"  - Layers: {n_layer}")
+print(f"  - Heads: {n_head}")
+print(f"  - Embedding Dimension: {n_embd}")
+print(f"  - Head Dimension: {n_embd // n_head}")
+print(f"\nTraining Settings:")
+print(f"  - Batch Size: {batch_size}")
+print(f"  - Gradient Accumulation: {gradient_accumulation_steps}")
+print(f"  - Effective Batch Size: {batch_size * gradient_accumulation_steps}")
+print(f"  - Learning Rate: {learning_rate}")
+print(f"\nPerplexity Tracking: {'ENABLED' if track_perplexity else 'DISABLED'}")
